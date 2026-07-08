@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-// GASTOS DO CASAL — renderer.js
+// FINANNZA — renderer.js
 // ═══════════════════════════════════════════════════════════════
 
 // ─── STATE ───────────────────────────────────────────────────────
@@ -1352,7 +1352,7 @@ function renderEvolutionSummary(months) {
 async function exportBackup() {
   const now      = new Date();
   const dateStr  = now.toISOString().slice(0, 10);
-  const filename = `gastos-backup-${dateStr}.json`;
+  const filename = `finannza-backup-${dateStr}.json`;
   const backup   = {
     _version:   1,
     appVersion: '2.0',

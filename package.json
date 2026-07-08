@@ -1,6 +1,6 @@
 {
-  "name": "gastos-casal",
-  "version": "1.0.0",
+  "name": "finannza",
+  "version": "1.1.0",
   "description": "Controle financeiro do casal — sem API, 100% local",
   "main": "main.js",
   "scripts": {
@@ -9,8 +9,8 @@
     "release": "electron-builder --win --x64 --publish always"
   },
   "build": {
-    "appId": "com.casal.gastos",
-    "productName": "Gastos do Casal",
+    "appId": "com.finannza.app",
+    "productName": "Finannza",
     "directories": {
       "output": "dist"
     },

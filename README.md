@@ -1,4 +1,4 @@
-# 💰 Gastos do Casal — versão local (sem API)
+# 💰 Finannza — versão local (sem API)
 
 Controle financeiro do casal com classificação automática por palavras-chave.
 100% offline, sem internet, sem API externa.

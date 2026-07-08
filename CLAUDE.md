@@ -1,6 +1,19 @@
-# CLAUDE.md — Gastos do Casal
+# CLAUDE.md — Finannza
 
 Guia técnico para desenvolvimento. Leia antes de qualquer alteração.
+
+---
+
+## Autonomia do Claude Code neste projeto
+
+O usuário autorizou execução autônoma de tarefas rotineiras neste projeto — **não pause para pedir confirmação** antes de: editar/criar arquivos, rodar comandos `npm`/`node`/build, ou `git add` / `git commit` / `git push` para o remoto já configurado (`origin`). Prossiga e reporte o que foi feito, em vez de perguntar antes.
+
+**Continue pedindo confirmação explícita** (não fica coberto pela autorização acima) para:
+- `git push --force` / force-push de qualquer tipo
+- `git reset --hard`, `git checkout --`/`git restore` que descartem trabalho não commitado
+- Apagar branches, arquivos ou o repositório remoto
+- Reescrever histórico já publicado (rebase de commits que já foram para o `origin`)
+- Qualquer ação fora deste diretório de projeto (ex: outros repositórios, configurações globais)
 
 ---
 

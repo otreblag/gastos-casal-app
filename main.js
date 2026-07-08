@@ -85,7 +85,9 @@ ipcMain.handle('open-file-dialog', async (_event, options) => {
 
 // ─── WINDOW ───────────────────────────────────────────────────────
 function createWindow() {
-  const iconPath = path.join(__dirname, 'assets', 'icon.ico');
+  const iconIcoPath = path.join(__dirname, 'assets', 'icon.ico');
+  const iconPngPath = path.join(__dirname, 'assets', 'icon.png');
+  const iconPath = fs.existsSync(iconIcoPath) ? iconIcoPath : (fs.existsSync(iconPngPath) ? iconPngPath : undefined);
   win = new BrowserWindow({
     width: 1100,
     height: 750,
@@ -96,8 +98,8 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
     },
-    title: 'Anna e Gabriel — Controle Financeiro',
-    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    title: 'Finannza',
+    icon: iconPath,
     backgroundColor: '#F1F0EC',
     show: false,
   });
@@ -133,8 +135,10 @@ function createTray() {
   const iconPath = path.join(__dirname, 'assets', 'tray-icon.png');
   // Also update taskbar icon on Windows
   if (process.platform === 'win32' && win) {
-    const taskbarIcon = path.join(__dirname, 'assets', 'icon.ico');
-    if (fs.existsSync(taskbarIcon)) win.setIcon(taskbarIcon);
+    const taskbarIconIco = path.join(__dirname, 'assets', 'icon.ico');
+    const taskbarIconPng = path.join(__dirname, 'assets', 'icon.png');
+    if (fs.existsSync(taskbarIconIco)) win.setIcon(taskbarIconIco);
+    else if (fs.existsSync(taskbarIconPng)) win.setIcon(taskbarIconPng);
   }
   let icon;
   try {
@@ -148,7 +152,7 @@ function createTray() {
   }
 
   tray = new Tray(icon);
-  tray.setToolTip('Gastos do Casal');
+  tray.setToolTip('Finannza — Seu dinheiro, seus planos');
 
   const contextMenu = Menu.buildFromTemplate([
     { label: 'Abrir', click: () => { win.show(); win.focus(); } },
