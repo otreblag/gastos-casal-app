@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "gastos-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["http-server", "src", "-p", "5173", "--cors", "-c-1"],
+      "port": 5173
+    }
+  ]
+}

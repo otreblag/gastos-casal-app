@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+
+# Dados pessoais/financeiros — nunca devem ir para o repositório
+gastos.json
+gastos-pre-restore.json
+*.backup.json
