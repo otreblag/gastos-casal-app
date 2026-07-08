@@ -1,9 +1,9 @@
-# 💰 Gastos do Casal — versão local (sem API)
+#  Gastos do Casal — versão local (sem API)
 
 Controle financeiro do casal com classificação automática por palavras-chave.
 100% offline, sem internet, sem API externa.
 
-## 🚀 Como rodar
+##  Como rodar
 
 ```bash
 npm install
@@ -11,24 +11,24 @@ npm start          # testar
 npm run build:win  # gerar .exe
 ```
 
-## 🏷️ Categorias
+##  Categorias
 - Gerencie categorias e palavras-chave direto na aba "Categorias"
 - Adicione novas categorias com ícone e cor personalizada
 - Adicione ou remova palavras de qualquer categoria
 - As alterações são salvas automaticamente
 
-## 🤖 Bot do Telegram (opcional)
+##  Bot do Telegram (opcional)
 - @BotFather → /newbot → copie o Token
 - Adicione o bot a um grupo + @userinfobot para obter o ID
 - Configure na aba "Bot Telegram" e clique em Iniciar
 - Mande mensagens como "Mercado 87,50" ou "Uber 23" no grupo
 
-## 💡 Como funciona a classificação
+##  Como funciona a classificação
 O sistema compara as palavras da mensagem com um dicionário de +600 palavras
 organizadas em categorias. Quanto mais palavras específicas encontrar, maior
 a confiança. O valor é extraído por expressões regulares.
 
-## 🔄 Atualização automática (electron-updater + GitHub Releases)
+## Atualização automática (electron-updater + GitHub Releases)
 
 O app verifica atualizações automaticamente ao abrir (`autoUpdater.checkForUpdatesAndNotify()`
 em `main.js`, só roda quando empacotado — `npm start` em modo dev não verifica). Também dá para
