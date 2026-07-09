@@ -5,6 +5,7 @@ const { autoUpdater } = require('electron-updater');
 
 let win  = null;
 let tray = null;
+let isQuitting = false;
 
 // ─── AUTO UPDATE (electron-updater + GitHub Releases) ─────────────
 autoUpdater.autoDownload = true;
@@ -39,7 +40,12 @@ autoUpdater.on('update-downloaded', (info) => {
     defaultId: 0,
     cancelId: 1,
   }).then(({ response }) => {
-    if (response === 0) autoUpdater.quitAndInstall();
+    if (response === 0) {
+      isQuitting = true;
+      if (tray) { tray.destroy(); tray = null; }
+      if (win) win.close();
+      autoUpdater.quitAndInstall(false, true);
+    }
   });
 });
 
@@ -150,7 +156,7 @@ function createWindow() {
 
   // Minimize to tray instead of closing
   win.on('close', (event) => {
-    if (tray) {
+    if (tray && !isQuitting) {
       event.preventDefault();
       win.hide();
     }
@@ -221,6 +227,8 @@ app.whenReady().then(() => {
   createTray();
   checkForUpdates();
 });
+
+app.on('before-quit', () => { isQuitting = true; });
 
 // Prevent quitting when all windows are hidden (tray keeps app alive)
 app.on('window-all-closed', () => {
