@@ -529,9 +529,15 @@ Sem `manual=true`, essas três situações só logam no console — nunca incomo
 
 `icon.ico` (janela + taskbar + instalador NSIS), `icon.png` (fallback), `tray-icon.png` (bandeja) — referenciados em `main.js` (`createWindow()`, `createTray()`) e em `package.json` (`build.win.icon`, `build.nsis.installerIcon/uninstallerIcon/installerHeaderIcon`). Ao trocar esses arquivos manualmente (GIMP, Convertio, etc.), não é necessário mudar nenhuma referência de código — os três nomes de arquivo já são fixos.
 
-**Cuidado ao testar localmente:** o Windows cacheia ícones por caminho de arquivo. Sobrescrever `assets/icon.ico` no mesmo caminho pode mostrar um ícone quadriculado/corrompido na taskbar **da máquina de dev** até o cache invalidar — não é o mesmo `.ico` que o instalador realmente empacota, e uma instalação nova (usuário final) nunca tem esse cache prévio. Para confirmar se é cache ou o arquivo em si, copie o `.ico` para um caminho novo e abra uma janela de teste apontando pra ele.
+**`icon.ico` precisa ser multi-resolução (16/24/32/48/64/128/256px), não só um frame de 256px.** Um `.ico` com um único frame grande faz o Windows reduzi-lo *on the fly* pra qualquer tamanho pequeno (barra de título, taskbar, Alt+Tab) — e esse downscale nativo do Windows corrompe visivelmente o canal alfa, aparecendo como um quadriculado/dithering nas bordas transparentes. **Isso já aconteceu de verdade** com o `.ico` gerado manualmente no GIMP/Convertio (só tinha o frame 256×256). Confirmado extraindo o ícone direto do recurso PE do `.exe` via `PrivateExtractIcons` (bypassa qualquer cache do shell) nos tamanhos 16/32/48px — mostrava o quadriculado mesmo assim, provando que era o arquivo, não cache do Windows.
 
-**Débito conhecido:** `icon.ico` só tem uma resolução (256×256). O Windows funciona (escala on-the-fly), mas um `.ico` multi-resolução (16/32/48/256) renderiza mais nítido em contextos pequenos (barra de título, taskbar).
+Fix: reempacotar a partir do `icon.png` atual (mesma arte, só o container muda) com múltiplas resoluções, deixando o Windows usar o frame pequeno já pronto em vez de reduzir o grande:
+```python
+from PIL import Image
+img = Image.open('assets/icon.png').convert('RGBA')
+img.save('assets/icon.ico', format='ICO', sizes=[(s,s) for s in (16,24,32,48,64,128,256)])
+```
+PIL redimensiona cada tamanho com LANCZOS internamente — é o mesmo método que `generate_icons.py` (script antigo, design diferente) já usava. Ao gerar um novo ícone em ferramenta externa (GIMP, Convertio, etc.), sempre exporte/reempacote como `.ico` multi-resolução — nunca só o frame grande.
 
 ---
 
