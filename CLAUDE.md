@@ -304,7 +304,7 @@ Card "Backup" na aba Config. `exportBackup()` grava um JSON com `_version`, `app
 ```
 Sem `<img>` de logo (removido — nome estilizado é a identidade visual) e sem subtítulo. Borda inferior `2px solid #B8913A` separando do `.tabs`. `select.month` tem `width:auto;flex-shrink:0` explícito — sem isso, a regra global `input,...,select{width:100%}` (index.html) faz o select ocupar 100% do `.header-right` e quebra os outros controles em linhas.
 
-Badge de versão discreto (`#app-version-badge`, `position:fixed` canto inferior direito) populado por `renderAppVersionInfo()` via IPC — ver seção "Auto-Update" abaixo.
+Badge de versão discreto (`#app-version-badge`, `position:fixed` canto inferior **esquerdo**) populado por `renderAppVersionInfo()` via IPC — ver seção "Auto-Update" abaixo. Fica à esquerda de propósito: `.content` tem `overflow-y:auto` e a scrollbar nativa ocupa o canto inferior direito da janela — um badge fixo ali sobrepõe a barra de rolagem em telas com conteúdo longo.
 
 ### Dashboard (`panel-dashboard`)
 ```
