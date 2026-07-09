@@ -539,6 +539,8 @@ img.save('assets/icon.ico', format='ICO', sizes=[(s,s) for s in (16,24,32,48,64,
 ```
 PIL redimensiona cada tamanho com LANCZOS internamente — é o mesmo método que `generate_icons.py` (script antigo, design diferente) já usava. Ao gerar um novo ícone em ferramenta externa (GIMP, Convertio, etc.), sempre exporte/reempacote como `.ico` multi-resolução — nunca só o frame grande.
 
+**Depois de corrigir o `.ico` e reinstalar, o ícone quebrado pode continuar aparecendo especificamente no botão da barra de tarefas** (mesmo com o `.exe` já correto e a janela/título já renderizando limpo) — isso é o **cache de ícones do Explorer** (`iconcache_*.db`), uma camada separada do ícone ao vivo da janela. Ele é populado uma vez por caminho de arquivo e não invalida sozinho quando o `.exe` é substituído/atualizado no mesmo lugar — nem reiniciar o app resolve, só reiniciar o `explorer.exe` (ou reboot). Diagnóstico: se `PrintWindow` na própria janela mostra o ícone limpo mas o botão da taskbar mostra quadriculado, é esse cache — reinicie o Explorer pra confirmar.
+
 ---
 
 ## Como Executar
