@@ -163,8 +163,67 @@ async function loadAll() {
   }
 }
 
+// Segredos criptografados via safeStorage (Electron): o localStorage guarda só
+// as versões cifradas (tgTokenEnc/sheetsSecretEnc), nunca o texto puro. O texto
+// puro fica só em memória (appConfig.tgToken/sheetsSecret) para uso em runtime.
+// Pares [chave em texto puro, chave cifrada]:
+const SECRET_KEY_PAIRS = [['tgToken', 'tgTokenEnc'], ['sheetsSecret', 'sheetsSecretEnc']];
+
 function saveConfigToStorage() {
-  localStorage.setItem('gc_config', JSON.stringify(appConfig));
+  const toStore = { ...appConfig };
+  // Só remove o texto puro se a criptografia estiver disponível (Electron sem
+  // fallback). Em modo web ou fallback, mantém texto puro (limitação conhecida).
+  if (isElectron() && !appConfig.secretsPlaintextFallback) {
+    SECRET_KEY_PAIRS.forEach(([plainKey]) => delete toStore[plainKey]);
+  }
+  localStorage.setItem('gc_config', JSON.stringify(toStore));
+}
+
+// Re-encripta os segredos em texto puro atuais para o cache cifrado em appConfig.
+// Retorna true se a criptografia está disponível; marca secretsPlaintextFallback caso não.
+async function refreshSecretCache() {
+  if (!isElectron()) { appConfig.secretsPlaintextFallback = true; return false; }
+  let available = true;
+  for (const [plainKey, encKey] of SECRET_KEY_PAIRS) {
+    const plain = appConfig[plainKey] || '';
+    if (!plain) { appConfig[encKey] = ''; continue; }
+    try {
+      const res = await window.electronAPI.encryptSecret(plain);
+      if (res && res.available && res.value != null) {
+        appConfig[encKey] = res.value;
+      } else { available = false; }
+    } catch { available = false; }
+  }
+  appConfig.secretsPlaintextFallback = !available;
+  if (!available && !appConfig._fallbackWarned) {
+    appConfig._fallbackWarned = true;
+    notify('Criptografia do sistema indisponível — credenciais salvas sem criptografia.', 'warn');
+  }
+  return available;
+}
+
+// Ao iniciar: descriptografa os segredos cifrados para memória e migra tokens
+// em texto puro de versões anteriores para o formato criptografado.
+async function hydrateSecrets() {
+  if (!isElectron()) return; // web: segredos ficam em texto puro no localStorage
+  const hadPlaintextStored = SECRET_KEY_PAIRS.some(([plainKey]) => !!appConfig[plainKey]);
+  for (const [plainKey, encKey] of SECRET_KEY_PAIRS) {
+    // Se já veio texto puro (versão antiga), preserva para migrar; senão descriptografa.
+    if (!appConfig[plainKey] && appConfig[encKey]) {
+      try {
+        const res = await window.electronAPI.decryptSecret(appConfig[encKey]);
+        appConfig[plainKey] = (res && res.value != null) ? res.value : '';
+      } catch { appConfig[plainKey] = ''; }
+    }
+  }
+  if (hadPlaintextStored) {
+    // Migração: cifra os tokens em texto puro e regrava (remove o texto puro do storage).
+    const ok = await refreshSecretCache();
+    saveConfigToStorage();
+    if (ok) addLog('🔒 Credenciais migradas para armazenamento criptografado.', 'info');
+  } else {
+    await refreshSecretCache(); // popula o cache cifrado p/ saves futuros
+  }
 }
 
 // ─── CONFIG ──────────────────────────────────────────────────────
@@ -186,7 +245,7 @@ function loadConfig() {
   currentPerson = appConfig.p1Name;
 }
 
-function saveConfigSettings() {
+async function saveConfigSettings() {
   const val = id => document.getElementById(id)?.value.trim() || '';
   const newP1      = val('cfg-p1')      || DEFAULT_CONFIG.p1Name;
   const newP2      = val('cfg-p2')      || DEFAULT_CONFIG.p2Name;
@@ -213,6 +272,7 @@ function saveConfigSettings() {
     diaFechamento: newFechamento,
     diaVencimento: newVencimento,
   };
+  await refreshSecretCache(); // cifra tgToken/sheetsSecret antes de persistir
   saveConfigToStorage();
   // Se as datas do cartão mudaram, recalcula competência de todos os lançamentos de crédito
   if (newFechamento !== oldFechamento || newVencimento !== oldVencimento) recalcularCompetencias();
@@ -1379,19 +1439,33 @@ function renderEvolutionSummary(months) {
 
 // ─── BACKUP ───────────────────────────────────────────────────────
 
+// Campos de credencial que NUNCA devem sair no backup (texto puro ou cifrado).
+const SECRET_CONFIG_KEYS = ['tgToken', 'tgTokenEnc', 'sheetsSecret', 'sheetsSecretEnc', 'appsScriptUrl'];
+
+// Monta o objeto de backup já sanitizado. Função pura (sem I/O) para ser testável.
+function buildBackupPayload() {
+  // Nunca incluir credenciais no backup — se o arquivo for compartilhado/subido
+  // para nuvem, o token do bot e o secret do Sheets vazariam em texto puro.
+  // Também não exportamos as versões criptografadas (tgTokenEnc/sheetsSecretEnc),
+  // pois a chave do safeStorage é atrelada ao dispositivo/usuário de origem.
+  const safeConfig = { ...appConfig };
+  SECRET_CONFIG_KEYS.forEach(k => delete safeConfig[k]);
+  return {
+    _version:   1,
+    appVersion: '2.0',
+    backupDate: new Date().toISOString(),
+    expenses, customCats, budgets, fixedExpenses, cards, monthGoals,
+    merchantMap, acertos,
+    deletedIds: [...deletedExpenseIds],
+    config: safeConfig,
+  };
+}
+
 async function exportBackup() {
   const now      = new Date();
   const dateStr  = now.toISOString().slice(0, 10);
   const filename = `finannza-backup-${dateStr}.json`;
-  const backup   = {
-    _version:   1,
-    appVersion: '2.0',
-    backupDate: now.toISOString(),
-    expenses, customCats, budgets, fixedExpenses, cards, monthGoals,
-    merchantMap, acertos,
-    deletedIds: [...deletedExpenseIds],
-    config: { ...appConfig },
-  };
+  const backup   = buildBackupPayload();
   const content = JSON.stringify(backup, null, 2);
 
   if (isElectron()) {
@@ -1514,7 +1588,15 @@ async function executeRestore() {
   deletedExpenseIds  = new Set((normalized.deletedIds || []).map(String));
 
   if (normalized.config) {
-    const keepLocal = { dataFolderPath: appConfig.dataFolderPath };
+    // Backups não contêm credenciais — preserva as do dispositivo atual para
+    // não zerar o token/secret ao restaurar na mesma máquina.
+    const keepLocal = {
+      dataFolderPath:  appConfig.dataFolderPath,
+      tgToken:         appConfig.tgToken,        tgTokenEnc:      appConfig.tgTokenEnc,
+      sheetsSecret:    appConfig.sheetsSecret,   sheetsSecretEnc: appConfig.sheetsSecretEnc,
+      appsScriptUrl:   appConfig.appsScriptUrl,
+      secretsPlaintextFallback: appConfig.secretsPlaintextFallback,
+    };
     appConfig = { ...DEFAULT_CONFIG, ...normalized.config, ...keepLocal };
     saveConfigToStorage();
   }
@@ -1522,6 +1604,7 @@ async function executeRestore() {
   await saveAll();
 
   loadConfig();
+  await hydrateSecrets();
   refreshAllDynamicSelects();
   renderPersonPills();
   updateMetrics(); renderCharts(); renderRecent(); renderList();
@@ -2537,11 +2620,33 @@ function deleteCategory(id) {
 }
 
 // ─── TELEGRAM BOT ─────────────────────────────────────────────────
+// Mascara um token do Telegram (formato "123456789:AA...") mostrando só o head
+// antes do ":" (o bot id, não-secreto) + ":***".
+function maskToken(tok) {
+  if (!tok || typeof tok !== 'string') return tok;
+  const i = tok.indexOf(':');
+  const head = i > 0 ? tok.slice(0, i) : tok.slice(0, 6);
+  return head + ':***';
+}
+
+// Remove de uma string qualquer ocorrência dos segredos atuais (token do bot na
+// URL/path e secret do Sheets), substituindo por versão mascarada. Usado em todo
+// log para garantir que nada exponha a credencial completa.
+function scrubSecrets(str) {
+  if (typeof str !== 'string') return str;
+  let out = str;
+  const tok = appConfig && appConfig.tgToken;
+  if (tok && tok.length >= 4) out = out.split(tok).join(maskToken(tok));
+  const sec = appConfig && appConfig.sheetsSecret;
+  if (sec && sec.length >= 4) out = out.split(sec).join('***');
+  return out;
+}
+
 function addLog(msg, type='') {
   const el=document.getElementById('log-box');
   const div=document.createElement('div');
   div.className='log-line '+type;
-  div.textContent=`[${new Date().toLocaleTimeString('pt-BR')}] ${msg}`;
+  div.textContent=`[${new Date().toLocaleTimeString('pt-BR')}] ${scrubSecrets(msg)}`;
   el.appendChild(div); el.scrollTop=el.scrollHeight;
 }
 
@@ -2683,7 +2788,7 @@ async function syncFromSheets() {
     if (el) el.textContent = `Última sync: ${new Date().toLocaleTimeString('pt-BR')}`;
 
   } catch(e) {
-    console.error('Erro ao sincronizar do Sheets:', e.message);
+    console.error('Erro ao sincronizar do Sheets:', scrubSecrets(e.message));
   }
 }
 
@@ -3626,6 +3731,7 @@ function dismissInvoiceAlert(alertKey) {
 async function init() {
   await loadAll();
   loadConfig();
+  await hydrateSecrets();
   setupCurrencyInputs();
   renderAppVersionInfo();
   appConfig.botWasRunning = false; // bot externo (Render) é o único autorizado

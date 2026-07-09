@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, ipcMain, dialog, nativeImage, session } = require('electron');
+const { app, BrowserWindow, Menu, Tray, ipcMain, dialog, nativeImage, session, safeStorage } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -128,6 +128,27 @@ ipcMain.handle('save-file-dialog', async (_event, options) => {
 ipcMain.handle('open-file-dialog', async (_event, options) => {
   const result = await dialog.showOpenDialog(win, { ...options, properties: ['openFile'] });
   return result.canceled ? null : result.filePaths[0];
+});
+
+// ─── SECRETS (safeStorage) ───────────────────────────────────────
+// Criptografa/descriptografa segredos (token do bot, secret do Sheets) com a
+// chave do SO (DPAPI no Windows). Retorna { available, value }:
+//   - available:false → criptografia indisponível na máquina (fallback texto puro no renderer)
+//   - value:null      → falha (ex: blob cifrado em outra máquina/usuário não descriptografa aqui)
+ipcMain.handle('encrypt-secret', (_event, plain) => {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return { available: false, value: null };
+    if (typeof plain !== 'string' || plain === '') return { available: true, value: '' };
+    return { available: true, value: safeStorage.encryptString(plain).toString('base64') };
+  } catch { return { available: false, value: null }; }
+});
+
+ipcMain.handle('decrypt-secret', (_event, b64) => {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return { available: false, value: null };
+    if (typeof b64 !== 'string' || b64 === '') return { available: true, value: '' };
+    return { available: true, value: safeStorage.decryptString(Buffer.from(b64, 'base64')) };
+  } catch { return { available: true, value: null }; }
 });
 
 ipcMain.handle('get-app-version', () => app.getVersion());

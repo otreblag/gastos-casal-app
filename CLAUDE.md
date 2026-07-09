@@ -446,8 +446,7 @@ Tema alternado por `toggleTheme()` via atributo `data-theme="dark"` no `<html>`.
 ## Dívida Técnica Conhecida (Não Introduza Mais)
 
 ### Críticas (segurança)
-- Token do Telegram salvo em `localStorage`/`gastos.json` (dentro de `appConfig`) em texto plano.
-- Token do Telegram exposto na URL de fetch — aparece em logs de rede.
+- Token do Telegram exposto na URL de fetch para a API do Telegram (`api.telegram.org/bot<token>/...`) — inerente à API. Mitigado: nunca é logado em texto puro (ver `scrubSecrets()`), e o bot interno fica desativado. O log automático de rede do Chromium (DevTools) ainda pode mostrá-lo se o bot interno for ligado.
 
 ### Funcionais
 - **Nomes hardcoded** ("Eu", "Anna", "Casal") em partes do `index.html` (header, ctx buttons) — os nomes configuráveis já funcionam via `appConfig`, mas o HTML inicial ainda tem strings fixas.
@@ -476,6 +475,10 @@ Tema alternado por `toggleTheme()` via atributo `data-theme="dark"` no `<html>`.
 - ~~`sandbox` não era explícito em `webPreferences`~~ — adicionado `sandbox: true` (era o default do Electron ≥20, agora blindado contra regressão); preload em `contextBridge` funciona em sandbox, nada quebrou
 - ~~Dependências carregadas por CDN (cdnjs, Google Fonts)~~ — Chart.js, SheetJS e a fonte Manrope auto-hospedados em `src/vendor/`; app agora funciona offline e sem risco de supply-chain
 - ~~Ausência total de CSP~~ — CSP restritiva aplicada via `onHeadersReceived` (Etapa 2B, com `'unsafe-inline'` temporário para script/style); `connect-src` libera Telegram + Apps Script (incl. o host de redirect `script.googleusercontent.com`). Falta ainda a Etapa 2A (remover `'unsafe-inline'` refatorando os `onclick`/`style` inline)
+- ~~Token/secret salvos em texto puro no `localStorage`~~ — migrados para `safeStorage` (cifrados em base64; texto puro só em memória). Migração automática de versões antigas + fallback gracioso se cripto indisponível
+- ~~Backup exportado vazava token/secret em texto puro~~ — `buildBackupPayload()` remove todas as `SECRET_CONFIG_KEYS`; aviso na UI de que credenciais não são incluídas
+- ~~Logs podiam expor o token completo~~ — `scrubSecrets()`/`maskToken()` mascaram token e secret em `addLog()` e `console.error` (ex. `123456:***`)
+- ~~`.gitignore` não cobria os backups reais (`finannza-backup-*.json`) nem `.env`~~ — adicionados ao `.gitignore` principal; repo do bot ganhou `.gitignore` (`.env`, `.env.*`, `node_modules/`, exceção `!.env.example`) e um `.env.example` documentando as chaves
 
 ---
 
@@ -512,8 +515,19 @@ Chart.js 4.4.1 (`vendor/chart.umd.js`), SheetJS/xlsx 0.18.5 (`vendor/xlsx.full.m
 ### Prioridade 1 — Sanitização de HTML
 `escapeHtml()` já existe no renderer e é aplicado consistentemente em `descricao`/`categoria`/`pessoa`/`data` nos pontos de `innerHTML` já auditados (`expenseItemHTML()`, relatórios, listas de parcelas/cartões). Ao adicionar novo template literal com dado do usuário, sempre passe por `escapeHtml()`.
 
-### Prioridade 2 — Token do Telegram
-Mova para `electron-store` com criptografia opcional ou `safeStorage` do Electron.
+### Armazenamento de segredos — `safeStorage` (implementado)
+`tgToken` e `sheetsSecret` são criptografados com **`safeStorage` do Electron** (DPAPI no Windows, atrelado à conta do SO) antes de irem para o `localStorage`. O `localStorage['gc_config']` guarda só as versões cifradas em base64 (`tgTokenEnc`/`sheetsSecretEnc`) — **nunca o texto puro**. O texto puro existe só em memória (`appConfig.tgToken`/`sheetsSecret`) para uso em runtime (fetch do bot/sync).
+
+Fluxo (`renderer.js`):
+- `main.js` expõe IPC `encrypt-secret`/`decrypt-secret` (via `preload.js` → `window.electronAPI.encryptSecret/decryptSecret`), cada um retornando `{ available, value }`.
+- `saveConfigToStorage()` remove `tgToken`/`sheetsSecret` (texto puro) do objeto antes de gravar, mantendo só os `*Enc` — exceto em modo web ou fallback.
+- `refreshSecretCache()` (async) recifra os segredos em texto puro para o cache `*Enc`; chamada em `saveConfigSettings()` antes de persistir.
+- `hydrateSecrets()` (async, chamada em `init()` após `loadConfig()` e no restore) descriptografa os `*Enc` para memória e **migra** automaticamente tokens em texto puro de versões anteriores (cifra + regrava, removendo o texto puro do storage).
+- **Fallback gracioso:** se `safeStorage.isEncryptionAvailable()` for `false`, `secretsPlaintextFallback=true` — mantém texto puro no `localStorage` (não quebra o app) e avisa o usuário via `notify()`. Modo web (sem Electron) idem — limitação conhecida.
+- **Backup:** `SECRET_CONFIG_KEYS` (`tgToken`, `tgTokenEnc`, `sheetsSecret`, `sheetsSecretEnc`, `appsScriptUrl`) são removidos do `config` em `buildBackupPayload()` — o backup nunca contém credenciais (nem cifradas — a chave do `safeStorage` é atrelada ao dispositivo de origem). O restore preserva as credenciais do dispositivo atual via `keepLocal`.
+
+### Nunca logar segredos
+`scrubSecrets(str)` substitui, em qualquer string de log, o `tgToken` (→ `maskToken()`, ex. `123456:***`) e o `sheetsSecret` (→ `***`) pelos valores mascarados. Aplicado centralmente em `addLog()` e nos `console.error` do sync. Ao adicionar novo log que possa conter URL/credencial, passe por `scrubSecrets()`.
 
 ### Nunca fazer
 - Aumentar escopo de `nodeIntegration`, desativar `contextIsolation` ou desativar `sandbox`

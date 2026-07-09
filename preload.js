@@ -12,4 +12,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppVersion:      ()                 => ipcRenderer.invoke('get-app-version'),
   getBuildDate:       ()                 => ipcRenderer.invoke('get-build-date'),
   checkForUpdates:    ()                 => ipcRenderer.send('check-for-updates'),
+  encryptSecret:      (plain)            => ipcRenderer.invoke('encrypt-secret', plain),
+  decryptSecret:      (b64)              => ipcRenderer.invoke('decrypt-secret', b64),
 });
