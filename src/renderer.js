@@ -69,6 +69,50 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// ─── VALIDAÇÃO/SANITIZAÇÃO DE DADOS EXTERNOS ─────────────────────
+// Aplicada a dados vindos de fora do controle do usuário: sync (Google Sheets),
+// bot do Telegram e importação de fatura (.xls). Complementa o escapeHtml() (que
+// protege o DOM) prevenindo que valores/datas/strings malformados quebrem o app.
+const VALIDATION = {
+  valorMax: 1000000,   // R$ 1.000.000 — teto plausível para um gasto
+  descMax:  200,       // caracteres na descrição
+  msgMax:   1000,      // caracteres na mensagem original (Telegram)
+  nameMax:  80,        // nome de pessoa
+  catMax:   80,        // nome de categoria
+  yearMin:  2000,      // datas anteriores são consideradas absurdas
+  yearMax:  2100,
+};
+
+// Remove caracteres de controle, colapsa espaços, trunca no limite. Nunca lança.
+function sanitizeText(s, max) {
+  if (s == null) return '';
+  const out = String(s).replace(/[\x00-\x1F\x7F]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return out.length > max ? out.slice(0, max) : out;
+}
+
+// Retorna um número monetário válido (0..valorMax, 2 casas) ou null se inválido/fora da faixa.
+function sanitizeMoney(v) {
+  const n = typeof v === 'number' ? v : parseFloat(String(v == null ? '' : v).replace(/\s/g, '').replace(',', '.'));
+  if (!Number.isFinite(n) || n < 0 || n > VALIDATION.valorMax) return null;
+  return Math.round(n * 100) / 100;
+}
+
+// Valida uma data 'DD/MM/YYYY' (existe de fato e ano plausível). Retorna normalizada ou null.
+function sanitizeDateBR(d) {
+  if (typeof d !== 'string') return null;
+  const m = d.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const day = +m[1], mon = +m[2], yr = +m[3];
+  if (yr < VALIDATION.yearMin || yr > VALIDATION.yearMax || mon < 1 || mon > 12 || day < 1 || day > 31) return null;
+  const dt = new Date(yr, mon - 1, day);
+  if (dt.getFullYear() !== yr || dt.getMonth() !== mon - 1 || dt.getDate() !== day) return null; // ex: 31/02
+  return `${String(day).padStart(2, '0')}/${String(mon).padStart(2, '0')}/${yr}`;
+}
+
+// Coerções defensivas para JSON parseável mas com tipos errados (arquivo corrompido).
+const asArray  = v => Array.isArray(v) ? v : [];
+const asObject = v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+
 const fmt          = v => 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const today        = () => new Date().toISOString().slice(0, 10);
 const parseDateStr = d => { const [day, mon, yr] = d.split('/'); return `${yr}-${mon}-${day}`; };
@@ -138,27 +182,29 @@ async function loadAll() {
     if (content) {
       try {
         const data    = JSON.parse(content);
-        expenses      = data.expenses      || [];
-        customCats    = data.customCats    || [];
-        budgets       = data.budgets       || [];
-        fixedExpenses = data.fixedExpenses || [];
-        deletedExpenseIds = new Set((data.deletedIds || []).map(String));
-        cards       = data.cards       || [];
-        monthGoals  = data.monthGoals  || [];
-        merchantMap = data.merchantMap || {};
-        acertos     = data.acertos     || [];
+        // asArray/asObject: um arquivo parseável mas com tipo errado (ex: expenses:"x")
+        // não deve virar estado inválido que quebra map/filter/unshift depois.
+        expenses      = asArray(data.expenses);
+        customCats    = asArray(data.customCats);
+        budgets       = asArray(data.budgets);
+        fixedExpenses = asArray(data.fixedExpenses);
+        deletedExpenseIds = new Set(asArray(data.deletedIds).map(String));
+        cards       = asArray(data.cards);
+        monthGoals  = asArray(data.monthGoals);
+        merchantMap = asObject(data.merchantMap);
+        acertos     = asArray(data.acertos);
       } catch { expenses = []; customCats = []; budgets = []; fixedExpenses = []; monthGoals = []; cards = []; merchantMap = {}; acertos = []; }
     }
   } else {
     try {
-      expenses      = JSON.parse(localStorage.getItem('gc_expenses')    || '[]');
-      customCats    = JSON.parse(localStorage.getItem('gc_customcats')  || '[]');
-      budgets       = JSON.parse(localStorage.getItem('gc_budgets')     || '[]');
-      fixedExpenses = JSON.parse(localStorage.getItem('gc_fixed')       || '[]');
-      monthGoals    = JSON.parse(localStorage.getItem('gc_monthgoals')  || '[]');
-      cards         = JSON.parse(localStorage.getItem('gc_cards')        || '[]');
-      merchantMap   = JSON.parse(localStorage.getItem('gc_merchantmap')  || '{}');
-      acertos       = JSON.parse(localStorage.getItem('gc_acertos')      || '[]');
+      expenses      = asArray(JSON.parse(localStorage.getItem('gc_expenses')    || '[]'));
+      customCats    = asArray(JSON.parse(localStorage.getItem('gc_customcats')  || '[]'));
+      budgets       = asArray(JSON.parse(localStorage.getItem('gc_budgets')     || '[]'));
+      fixedExpenses = asArray(JSON.parse(localStorage.getItem('gc_fixed')       || '[]'));
+      monthGoals    = asArray(JSON.parse(localStorage.getItem('gc_monthgoals')  || '[]'));
+      cards         = asArray(JSON.parse(localStorage.getItem('gc_cards')        || '[]'));
+      merchantMap   = asObject(JSON.parse(localStorage.getItem('gc_merchantmap')  || '{}'));
+      acertos       = asArray(JSON.parse(localStorage.getItem('gc_acertos')      || '[]'));
     } catch { expenses = []; customCats = []; budgets = []; fixedExpenses = []; monthGoals = []; cards = []; merchantMap = {}; acertos = []; }
   }
 }
@@ -699,13 +745,20 @@ function testClassifier() {
 
 // ─── CORE EXPENSE ─────────────────────────────────────────────────
 function addExpenseObj({ descricao, valor, categoria, categoriaId, icone, cor, pessoa, mensagem, confianca, metodo, installment, splitOf, splitPct, fixedId, cardId }) {
+  // Saneamento defensivo — cobre entrada manual e o bot do Telegram (from/text livres).
+  const valorSan = sanitizeMoney(valor);
+  if (valorSan === null) { notify('Valor inválido ou fora da faixa — lançamento não adicionado.', 'err'); return; }
+  descricao = sanitizeText(descricao, VALIDATION.descMax) || 'Sem descrição';
+  categoria = sanitizeText(categoria, VALIDATION.catMax) || 'Outros';
+  pessoa    = sanitizeText(pessoa, VALIDATION.nameMax);
+  mensagem  = sanitizeText(mensagem, VALIDATION.msgMax);
   const now    = new Date();
   const dataBR = now.toLocaleDateString('pt-BR');
   expenses.unshift({
     id: Date.now() + Math.random(),
-    descricao, valor: parseFloat(valor) || 0,
+    descricao, valor: valorSan,
     categoria, categoriaId, icone, cor,
-    pessoa, mensagem: mensagem || '', confianca: confianca || 0,
+    pessoa, mensagem, confianca: confianca || 0,
     data: dataBR, ts: now.getTime(),
     metodo: metodo || '',
     cardId: cardId || null,
@@ -1615,15 +1668,17 @@ async function executeRestore() {
 }
 
 function migrateData(data) {
-  data.expenses      = data.expenses      || [];
-  data.customCats    = data.customCats    || [];
-  data.budgets       = data.budgets       || [];
-  data.fixedExpenses = data.fixedExpenses || [];
-  data.cards         = data.cards         || [];
-  data.monthGoals    = data.monthGoals    || [];
-  data.merchantMap   = data.merchantMap   || {};
-  data.acertos       = data.acertos       || [];
-  data.deletedIds    = data.deletedIds    || [];
+  // Coage cada campo ao tipo esperado — um backup parcialmente corrompido
+  // (ex: customCats:"x") não pode injetar um não-array no estado.
+  data.expenses      = asArray(data.expenses);
+  data.customCats    = asArray(data.customCats);
+  data.budgets       = asArray(data.budgets);
+  data.fixedExpenses = asArray(data.fixedExpenses);
+  data.cards         = asArray(data.cards);
+  data.monthGoals    = asArray(data.monthGoals);
+  data.merchantMap   = asObject(data.merchantMap);
+  data.acertos       = asArray(data.acertos);
+  data.deletedIds    = asArray(data.deletedIds);
   // Backfill missing mesCompetencia (fallback: purchase month)
   data.expenses.forEach(e => {
     if (e.metodo === 'Crédito' && e.data && !e.mesCompetencia) {
@@ -2682,15 +2737,17 @@ async function pollTelegram(cfg) {
     const resp=await fetch(`https://api.telegram.org/bot${cfg.tgToken}/getUpdates?offset=${lastUpdateId+1}&timeout=0`);
     const data=await resp.json();
     if (!data.ok) { addLog('Erro: '+(data.description||'?'),'err'); return; }
-    if (!data.result.length) return;
+    if (!Array.isArray(data.result) || !data.result.length) return;
     for (const update of data.result) {
+      if (!update || typeof update !== 'object') continue;
       lastUpdateId=update.update_id;
       const msg=update.message||update.channel_post;
-      if (!msg) continue;
+      if (!msg || !msg.chat) continue;
       const normalize=id=>String(id).replace(/^-100/,'').replace(/^-/,'');
       if (normalize(msg.chat.id)!==normalize(cfg.tgGroup)) { addLog(`Chat ${msg.chat.id} ignorado`,''); continue; }
-      const text=(msg.text||msg.caption||'').trim();
-      const from=msg.from?.first_name||'Alguém';
+      // Limita o tamanho do texto antes de classificar (evita processar payload gigante).
+      const text=sanitizeText(msg.text||msg.caption||'', VALIDATION.msgMax);
+      const from=sanitizeText(msg.from?.first_name, VALIDATION.nameMax)||'Alguém';
       if (!text) continue;
       addLog(`📩 ${from}: "${text.slice(0,70)}"`, 'info');
       const r=classifyInput(text);
@@ -2742,38 +2799,46 @@ async function syncFromSheets() {
     const resp = await fetch(`${url}?acao=listar&secret=${encodeURIComponent(sheetsSecret)}`);
     if (!resp.ok) return;
     const data = await resp.json();
-    if (!data.ok || !data.gastos) return;
+    if (!data.ok || !Array.isArray(data.gastos)) return;
 
     const existingIds = new Set(expenses.map(e => String(e.id)));
-    let added = 0;
+    let added = 0, dropped = 0;
     const allCatsSync   = getAllCategories();
     const catByIdSync   = Object.fromEntries(allCatsSync.map(c => [c.id,                 c]));
     const catByNameSync = Object.fromEntries(allCatsSync.map(c => [c.nome.toLowerCase(), c]));
 
     for (const g of data.gastos) {
-      if (existingIds.has(String(g.id))) continue; // já existe, pula
-      if (deletedExpenseIds.has(String(g.id))) continue; // foi apagado, não recriar
-      const catIdNorm  = (g.categoria||'outros').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,'_');
-      const catDefSync = catByIdSync[catIdNorm] || catByNameSync[(g.categoria||'').toLowerCase()];
+      if (!g || typeof g !== 'object' || g.id == null) { dropped++; continue; }
+      if (existingIds.has(String(g.id))) continue; // ja existe, pula
+      if (deletedExpenseIds.has(String(g.id))) continue; // foi apagado, nao recriar
+      // Validacao de tipos - descarta registros com valor invalido/fora da faixa.
+      const valorSan = sanitizeMoney(g.valor);
+      if (valorSan === null) { dropped++; continue; }
+      const categoriaSan = sanitizeText(g.categoria, VALIDATION.catMax) || 'Outros';
+      const catIdNorm  = categoriaSan.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,'_');
+      const catDefSync = catByIdSync[catIdNorm] || catByNameSync[categoriaSan.toLowerCase()];
+      // Data invalida/absurda -> cai para hoje (nao descarta o gasto por causa da data).
+      const dataSan = sanitizeDateBR(g.data) || new Date().toLocaleDateString('pt-BR');
       // Converte formato do Sheets para formato do app
       expenses.unshift({
         id:          g.id,
-        descricao:   g.descricao || '',
-        valor:       parseFloat(g.valor) || 0,
-        categoria:   g.categoria || 'Outros',
+        descricao:   sanitizeText(g.descricao, VALIDATION.descMax),
+        valor:       valorSan,
+        categoria:   categoriaSan,
         categoriaId: catIdNorm,
-        icone:       catDefSync?.icone || g.icone || '📦',
-        cor:         catDefSync?.cor   || g.cor   || '#5F5E5A',
-        pessoa:      g.pessoa || '',
-        mensagem:    g.mensagem || '',
+        icone:       catDefSync?.icone || '📦',
+        cor:         catDefSync?.cor   || '#5F5E5A',
+        pessoa:      sanitizeText(g.pessoa, VALIDATION.nameMax),
+        mensagem:    sanitizeText(g.mensagem, VALIDATION.msgMax),
         confianca:   parseInt(g.confianca) || 0,
-        metodo:      g.metodo || 'Telegram',
-        data:        g.data || new Date().toLocaleDateString('pt-BR'),
+        metodo:      sanitizeText(g.metodo, VALIDATION.nameMax) || 'Telegram',
+        data:        dataSan,
         ts:          parseInt(g.id) || Date.now(),
         splitOf:     null, splitPct: null, installment: null,
       });
       added++;
     }
+    if (dropped > 0) console.warn(`[sync] ${dropped} registro(s) descartado(s) por falha de validacao.`);
 
     if (added > 0) {
       appConfig.sheetsLastSync = Date.now();
@@ -2906,7 +2971,9 @@ function handleInvoiceFile(event) {
       // raw:true preserves native types (Dates, numbers); defval:'' fills empty cells
       const rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:true, defval:'' });
 
-      if (rows.length < 3) { notify('Arquivo sem transações ou formato inválido.','err'); return; }
+      if (!Array.isArray(rows) || rows.length < 3 || !Array.isArray(rows[1])) {
+        notify('Arquivo sem transações ou formato inválido.','err'); return;
+      }
 
       // Row 1 contains column headers
       const header = rows[1].map(h => String(h).trim());
@@ -2920,20 +2987,23 @@ function handleInvoiceFile(event) {
       };
 
       if (COL.desc < 0 || COL.valorBR < 0) {
-        notify('Formato de arquivo inesperado. Verifique se é a fatura C6.','err');
+        notify('Formato de arquivo inesperado — colunas "Descrição" e "Valor (em R$)" não encontradas. Verifique se é a fatura C6 Bank (.xls/.xlsx).','err');
         return;
       }
 
       const transactions = [];
+      let invalidRows = 0;
       for (let i = 2; i < rows.length; i++) {
         const row = rows[i];
-        if (!row || !row.some(c => c !== '')) continue;
-        const valorBR = _parseValorBR(row[COL.valorBR]);
-        if (!valorBR || valorBR <= 0) continue; // skip zeros and credits
-        const desc    = String(row[COL.desc]    || '').trim();
-        const dataBR  = _formatDateBR(row[COL.data]);
-        const catBanco= String(row[COL.catBanco]|| '').trim();
-        const parcela = String(row[COL.parcela] || '').trim();
+        if (!Array.isArray(row) || !row.some(c => c !== '')) continue;
+        // Valor: valida faixa (0..valorMax); descarta zeros, créditos e absurdos.
+        const valorBR = sanitizeMoney(_parseValorBR(row[COL.valorBR]));
+        if (valorBR === null || valorBR <= 0) { invalidRows++; continue; }
+        const desc    = sanitizeText(row[COL.desc], VALIDATION.descMax) || '(sem descrição)';
+        // Data: usa a do arquivo se válida, senão hoje.
+        const dataBR  = sanitizeDateBR(_formatDateBR(row[COL.data])) || new Date().toLocaleDateString('pt-BR');
+        const catBanco= sanitizeText(row[COL.catBanco], VALIDATION.catMax);
+        const parcela = sanitizeText(row[COL.parcela], 20);
         const finalCartao = COL.finalCartao >= 0
           ? String(row[COL.finalCartao] || '').trim().replace(/\D/g, '').slice(-4)
           : null;
@@ -2941,11 +3011,12 @@ function handleInvoiceFile(event) {
         transactions.push({ desc, dataBR, catBanco, parcela, valorBR, cat, finalCartao });
       }
 
-      if (!transactions.length) { notify('Nenhuma transação encontrada no arquivo.','err'); return; }
+      if (invalidRows > 0) console.warn(`[fatura] ${invalidRows} linha(s) ignorada(s) por valor inválido/fora da faixa.`);
+      if (!transactions.length) { notify('Nenhuma transação válida encontrada no arquivo.','err'); return; }
       _renderInvoicePreview(transactions);
     } catch(err) {
-      console.error(err);
-      notify('Erro ao ler o arquivo: ' + err.message, 'err');
+      console.error('[fatura] Falha ao processar o arquivo:', err.message);
+      notify('Não foi possível ler o arquivo. Verifique se é uma fatura C6 Bank válida (.xls/.xlsx).', 'err');
     }
   };
   reader.readAsArrayBuffer(file);

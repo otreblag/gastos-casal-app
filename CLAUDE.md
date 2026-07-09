@@ -512,8 +512,22 @@ base-uri 'none'
 ### Dependências de terceiros — auto-hospedadas (`src/vendor/`)
 Chart.js 4.4.1 (`vendor/chart.umd.js`), SheetJS/xlsx 0.18.5 (`vendor/xlsx.full.min.js`) e a fonte Manrope (`vendor/fonts/manrope-latin-{400,500,600,700,800}-normal.woff2`, subset latin — cobre acentuação pt-BR) são servidos **localmente**, não mais por CDN (cdnjs/Google Fonts). Isso: (a) permite a CSP com `default-src 'self'`/`script-src 'self'`; (b) elimina risco de supply-chain do CDN; (c) faz o app funcionar **offline**, alinhado à filosofia "100% local". `package.json → build.files` já inclui `src/**/*`, então o `vendor/` entra no instalador automaticamente. Ao atualizar uma dessas libs, **rebaixe o arquivo para `vendor/` e ajuste a tag `<script>`** — nunca volte a apontar para CDN.
 
-### Prioridade 1 — Sanitização de HTML
-`escapeHtml()` já existe no renderer e é aplicado consistentemente em `descricao`/`categoria`/`pessoa`/`data` nos pontos de `innerHTML` já auditados (`expenseItemHTML()`, relatórios, listas de parcelas/cartões). Ao adicionar novo template literal com dado do usuário, sempre passe por `escapeHtml()`.
+### Prioridade 1 — Sanitização de HTML (XSS)
+`escapeHtml()` (escapa `& < > " '`) é aplicado em **100%** dos pontos de `innerHTML` que recebem dado externo — auditado campo a campo: `descricao`/`categoria`/`pessoa`/`data`/`metodo` em `expenseItemHTML()`, relatórios, divisão, parcelas, faturas; `desc`/`origDesc`/`catBanco`/`parcela` no preview de fatura (`_renderInvoicePreview`); nomes de merchant e de cartão. `icone`/`cor` vêm de definições internas de categoria (não de texto externo). **Não há lacuna de XSS** — dados do Telegram/Sheets/fatura são armazenados crus mas escapados na renderização (um `<img onerror>` numa descrição aparece como texto literal, não executa). Ao adicionar novo template literal com dado do usuário, sempre passe por `escapeHtml()`.
+
+### Validação e sanitização de dados externos (ingestão)
+Complementa o `escapeHtml()` (que protege o DOM): impede que dados malformados/maliciosos de fontes externas (sync do Sheets, bot do Telegram, importação de fatura) quebrem o app. Helpers no topo do `renderer.js` (constante `VALIDATION` com os limites):
+- `sanitizeText(s, max)` — remove caracteres de controle (`\x00-\x1F\x7F`), colapsa espaços, trunca. Limites: descrição 200, mensagem 1000, nome 80, categoria 80.
+- `sanitizeMoney(v)` — retorna número em `0..1.000.000` (2 casas) ou **`null`** se inválido/fora da faixa (NaN, negativo, absurdo).
+- `sanitizeDateBR(d)` — valida `DD/MM/YYYY` real (ano `2000..2100`, rejeita `31/02`) ou `null`.
+- `asArray(v)`/`asObject(v)` — coerção defensiva para JSON parseável mas com tipo errado.
+
+Onde é aplicado:
+- **`syncFromSheets()`** — `Array.isArray(data.gastos)`; por registro: valor inválido → **descarta** (conta em `dropped`, `console.warn` discreto sem expor dados); data inválida → cai para hoje; strings truncadas. Registro sem `id` ou não-objeto → descartado.
+- **`addExpenseObj()`** (entrada manual + bot) — valor inválido/fora da faixa → `notify` de erro e **não adiciona**; descrição/categoria/pessoa/mensagem sanitizadas.
+- **`pollTelegram()`** — `Array.isArray(data.result)`, guarda `msg.chat`; `from`/`text` sanitizados (cap de tamanho antes de `classifyInput`).
+- **`handleInvoiceFile()`** — valida presença das colunas `Descrição`/`Valor (em R$)` (erro claro se ausentes: "Formato de arquivo inesperado… fatura C6 Bank"), `Array.isArray(rows[1])`; por linha valor/descrição/data sanitizados, linhas inválidas contadas e logadas.
+- **`loadAll()` / `migrateData()`** — cada array/objeto do JSON passa por `asArray`/`asObject`, então um `gastos.json`/backup corrompido-mas-parseável (ex: `expenses:"x"`) não injeta estado inválido. `JSON.parse` sempre em try/catch; `importBackup()` valida `Array.isArray(data.expenses)` antes de aplicar e grava snapshot `gastos-pre-restore.json` antes de sobrescrever.
 
 ### Armazenamento de segredos — `safeStorage` (implementado)
 `tgToken` e `sheetsSecret` são criptografados com **`safeStorage` do Electron** (DPAPI no Windows, atrelado à conta do SO) antes de irem para o `localStorage`. O `localStorage['gc_config']` guarda só as versões cifradas em base64 (`tgTokenEnc`/`sheetsSecretEnc`) — **nunca o texto puro**. O texto puro existe só em memória (`appConfig.tgToken`/`sheetsSecret`) para uso em runtime (fetch do bot/sync).
@@ -601,6 +615,7 @@ Versão lida via IPC (`getAppVersion()` → `app.getVersion()`), nunca hardcoded
 
 | Versão | Data | Resumo |
 |---|---|---|
+| **1.1.9** | 07-09 | **Validação/sanitização de dados externos.** Helpers `sanitizeText`/`sanitizeMoney`/`sanitizeDateBR`/`asArray`/`asObject` aplicados na ingestão (sync do Sheets, bot, importação de fatura, `addExpenseObj`, `loadAll`/`migrateData`): valores fora de `0..1M`, datas absurdas e registros malformados são descartados/truncados com log discreto; JSON corrompido não zera nem corrompe os dados existentes. Auditoria confirmou cobertura 100% de `escapeHtml()` (sem lacuna de XSS). |
 | **1.1.8** | 07-09 | **Segredos criptografados em repouso.** `safeStorage` (DPAPI) para `tgToken`/`sheetsSecret` — localStorage guarda só as versões cifradas, texto puro só em memória; migração automática de texto puro + fallback gracioso. Backup deixa de incluir credenciais (`buildBackupPayload()` remove `SECRET_CONFIG_KEYS`) + aviso na UI. Logs mascarados (`scrubSecrets()`/`maskToken()`). `.gitignore` cobre `finannza-backup-*.json`/`.env`; repo do bot ganhou `.gitignore` + `.env.example`. |
 | **1.1.7** | 07-09 | **Hardening do Electron.** `sandbox: true` explícito. Dependências de CDN (Chart.js, SheetJS, fonte Manrope) auto-hospedadas em `src/vendor/` → app funciona offline, sem supply-chain. CSP restritiva via `onHeadersReceived` (`'unsafe-inline'` temporário; `connect-src` libera Telegram + Apps Script + `script.googleusercontent.com`). |
 | **1.1.6** | 07-09 | Badge de versão movido do canto inferior direito para o esquerdo (sobrepunha a scrollbar nativa de `.content`). |
