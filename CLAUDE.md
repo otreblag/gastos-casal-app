@@ -41,7 +41,7 @@ src/
 package.json         # Electron 29 + electron-builder
 ```
 
-**Sem framework de UI, sem bundler, sem TypeScript.** Tudo é JS vanilla. O renderer roda com `nodeIntegration: false` + `contextIsolation: true`; a única ponte com o processo principal é `preload.js` (`contextBridge.exposeInMainWorld`), exposta como `window.electronAPI` (`readFile`, `writeFile`, `selectFolder`, `saveFileDialog`, `openFileDialog`, etc.). Isso é intencional para manter zero configuração de build.
+**Sem framework de UI, sem bundler, sem TypeScript.** Tudo é JS vanilla. O renderer roda com `nodeIntegration: false` + `contextIsolation: true`; a única ponte com o processo principal é `preload.js` (`contextBridge.exposeInMainWorld`), exposta como `window.electronAPI` (`readFile`, `writeFile`, `selectFolder`, `saveFileDialog`, `openFileDialog`, `getAppVersion`, `getBuildDate`, `checkForUpdates`, etc.). Isso é intencional para manter zero configuração de build.
 
 **Persistência — modo Electron:** arquivo `gastos.json` na pasta configurada (`appConfig.dataFolderPath` ou userData). Estrutura do JSON:
 ```json
@@ -297,6 +297,15 @@ Card "Backup" na aba Config. `exportBackup()` grava um JSON com `_version`, `app
 
 ## Estrutura das Abas
 
+### Header (`.header`, fora das abas)
+```
+.header-brand → .header-title "FIN[ANN dourado #C9A24B]ZA" — sem logo, sem slogan
+.header-right → ctx-toggle (Pessoal/Empresa) · bot-pill + btn Iniciar bot · select #month-sel · theme-btn
+```
+Sem `<img>` de logo (removido — nome estilizado é a identidade visual) e sem subtítulo. Borda inferior `2px solid #B8913A` separando do `.tabs`. `select.month` tem `width:auto;flex-shrink:0` explícito — sem isso, a regra global `input,...,select{width:100%}` (index.html) faz o select ocupar 100% do `.header-right` e quebra os outros controles em linhas.
+
+Badge de versão discreto (`#app-version-badge`, `position:fixed` canto inferior direito) populado por `renderAppVersionInfo()` via IPC — ver seção "Auto-Update" abaixo.
+
 ### Dashboard (`panel-dashboard`)
 ```
 .metrics (grid 4 cols)
@@ -356,6 +365,7 @@ card de parcelas/divisão detalhada (renderDivisao())
 card "💳 Meus cartões" — #cards-list (renderCardsList()), form de cadastro/edição de cartão
 card "💳 Cartão de Crédito" — #cfg-fechamento/#cfg-vencimento (padrão/fallback) + btn 🔄 Recalcular competências
 card "🗄️ Backup" — #backup-info (data do último backup) + exportar/importar (exportBackup() / importBackup())
+card "ℹ️ Sobre" — versão + data da última build (lidas via IPC, ver "Auto-Update") + btn 🔄 Verificar atualizações
 ```
 
 ### Categorias (`panel-categorias`)
@@ -454,6 +464,12 @@ Tema alternado por `toggleTheme()` via atributo `data-theme="dark"` no `<html>`.
 - ~~`'anel'` em roupas capturava "janela" erroneamente~~ — removido de `roupas` no `bot.js` (`"janela"` contém `"anel"` como substring, marcava 2 pts para roupas)
 - ~~"janela" e termos de reforma/esquadria não classificavam como Moradia~~ — adicionadas 23 palavras à categoria `moradia` no `bot.js`: janela, vidro, vidraçaria, esquadria, persiana, veneziana, mosquiteiro, grade, tela mosquiteiro, calha, impermeabilização, infiltração, goteira, rejunte, silicone, porta, dobradiça, fechadura, maçaneta, trinco, parafuso, bucha, ferrolho
 - ~~`nodeIntegration: true` + `contextIsolation: false` + `webSecurity: false`~~ — `main.js` já usa `nodeIntegration: false` + `contextIsolation: true` + `preload.js` com `contextBridge` (`window.electronAPI`)
+- ~~Header com logo cortado e nome pequeno~~ — logo removido, "FINANNZA" em destaque (28px, "ANN" dourado), borda inferior dourada, controles alinhados em uma linha
+- ~~`select.month` sem `width:auto` explícito~~ — herdava `width:100%` de uma regra CSS global de `select`, quebrando os controles do header em múltiplas linhas
+- ~~"Verificar atualizações" não dava feedback nenhum~~ — dialogs adicionados para modo dev / já atualizado / erro (só quando a checagem é manual)
+- ~~Releases do GitHub ficavam presos como draft~~ — `releaseType: "release"` adicionado ao `build.publish`; v1.0.0/v1.1.0/v1.1.1 tiveram que ser publicados manualmente via API para corrigir o histórico
+- ~~`quitAndInstall()` travava com "Não é possível fechar o Finannza"~~ — flag `isQuitting` faz o handler de `close` parar de interceptar e minimizar para bandeja durante o auto-update/sair
+- ~~Versão do app não aparecia em lugar nenhum na UI~~ — badge discreto no canto da tela + card "Sobre" na Config, ambos lidos via IPC (`getAppVersion()`/`getBuildDate()`)
 
 ---
 
@@ -482,11 +498,48 @@ Mova para `electron-store` com criptografia opcional ou `safeStorage` do Electro
 
 ---
 
+## Auto-Update (`electron-updater` + GitHub Releases)
+
+`main.js` usa `electron-updater` com provider `github` (`owner: otreblag`, `repo: gastos-casal-app`, config em `package.json` → `build.publish`). `autoDownload: true`, `autoInstallOnAppQuit: true`.
+
+**`checkForUpdates(manual = false)`** — chamada silenciosa na inicialização (`manual=false`) e pelo menu Arquivo → "Verificar atualizações" / botão "🔄 Verificar atualizações" no card Sobre (`manual=true`, via IPC `check-for-updates`). Só quando `manual` é `true` os dialogs de feedback aparecem:
+- App não empacotado (`!app.isPackaged`, ou seja rodando via `npm start`) → dialog explicando que só funciona no `.exe` instalado
+- Já na versão mais recente → dialog "Você já está usando a versão mais recente"
+- Erro (rede, GitHub, etc.) → dialog com a mensagem de erro
+
+Sem `manual=true`, essas três situações só logam no console — nunca incomodam o usuário na inicialização silenciosa.
+
+**Fechamento durante a instalação da atualização** — `win.on('close', ...)` normalmente intercepta o fechamento e minimiza para a bandeja (`tray && !isQuitting`). Isso quebrava o auto-update ("Não é possível fechar o Finannza") porque o `quitAndInstall()` não conseguia encerrar o processo de verdade. Fix: uma flag global `isQuitting`, setada `true` (a) antes de chamar `quitAndInstall()` no handler de `update-downloaded` — junto com `tray.destroy()` e `win.close()` explícito — e (b) no evento `app.on('before-quit', ...)`, cobrindo o "Sair" do menu também. Com `isQuitting=true`, o `close` handler deixa a janela fechar de verdade em vez de escondê-la.
+
+`autoUpdater.quitAndInstall(false, true)` — `isSilent=false` (mostra só uma tela de progresso/reinício, não o wizard completo — ver nota abaixo) e `isForceRunAfter=true` (reabre o app sozinho após instalar).
+
+**Por que a tela de escolha "todos os usuários / só eu" não reaparece na atualização automática:** o instalador NSIS gerado pelo electron-builder usa `MultiUser.nsh`, que detecta uma instalação existente no registro do Windows e reaproveita o modo escolhido anteriormente — independente de como o instalador foi invocado. Essa tela só aparece na **instalação manual** (usuário roda o `.exe` baixado manualmente) quando não há instalação prévia detectável.
+
+**`releaseType: "release"`** em `build.publish` (package.json) — **crítico**. Sem essa opção, o electron-builder publica os releases do GitHub como **draft**, invisíveis para o `electron-updater` (e para qualquer usuário navegando os releases sem estar autenticado). Isso já aconteceu nos releases v1.0.0/v1.1.0/v1.1.1 — todos ficaram presos como draft até serem publicados manualmente via API. Sempre confirme `draft: false` após `npm run release` (`gh api` ou a REST API do GitHub com um token autenticado — a listagem pública de releases não mostra drafts, então checar sem autenticação dá falso-negativo).
+
+**IPC exposto via `preload.js`** (`window.electronAPI`):
+- `getAppVersion()` → `app.getVersion()` (lê `package.json` do lado do main process — nunca hardcode a versão no HTML/renderer)
+- `getBuildDate()` → mtime de `app.getAppPath()` (aproximação de "última atualização"; `null` se indisponível)
+- `checkForUpdates()` → dispara `checkForUpdates(true)` no main via `ipcRenderer.send('check-for-updates')`
+
+---
+
+## Ícones do App (`assets/`)
+
+`icon.ico` (janela + taskbar + instalador NSIS), `icon.png` (fallback), `tray-icon.png` (bandeja) — referenciados em `main.js` (`createWindow()`, `createTray()`) e em `package.json` (`build.win.icon`, `build.nsis.installerIcon/uninstallerIcon/installerHeaderIcon`). Ao trocar esses arquivos manualmente (GIMP, Convertio, etc.), não é necessário mudar nenhuma referência de código — os três nomes de arquivo já são fixos.
+
+**Cuidado ao testar localmente:** o Windows cacheia ícones por caminho de arquivo. Sobrescrever `assets/icon.ico` no mesmo caminho pode mostrar um ícone quadriculado/corrompido na taskbar **da máquina de dev** até o cache invalidar — não é o mesmo `.ico` que o instalador realmente empacota, e uma instalação nova (usuário final) nunca tem esse cache prévio. Para confirmar se é cache ou o arquivo em si, copie o `.ico` para um caminho novo e abra uma janela de teste apontando pra ele.
+
+**Débito conhecido:** `icon.ico` só tem uma resolução (256×256). O Windows funciona (escala on-the-fly), mas um `.ico` multi-resolução (16/32/48/256) renderiza mais nítido em contextos pequenos (barra de título, taskbar).
+
+---
+
 ## Como Executar
 
 ```bash
 npm start          # desenvolvimento
-npm run build:win  # gera instalador .exe em /dist
+npm run build:win  # gera instalador .exe em /dist (sem publicar)
+npm run release    # gera o instalador e publica no GitHub Releases (precisa de GH_TOKEN no ambiente)
 ```
 
 Requer Node.js + npm. `electron` e `electron-builder` são devDependencies.
