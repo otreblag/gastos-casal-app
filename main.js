@@ -10,11 +10,25 @@ let tray = null;
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
 
+let manualUpdateCheck = false;
+
 autoUpdater.on('update-available', (info) => {
   console.log(`[updater] Atualização disponível: v${info.version}`);
 });
 
+autoUpdater.on('update-not-available', () => {
+  if (manualUpdateCheck && win) {
+    dialog.showMessageBox(win, {
+      type: 'info',
+      title: 'Verificar atualizações',
+      message: 'Você já está usando a versão mais recente do Finannza.',
+    });
+  }
+  manualUpdateCheck = false;
+});
+
 autoUpdater.on('update-downloaded', (info) => {
+  manualUpdateCheck = false;
   if (!win) return;
   dialog.showMessageBox(win, {
     type: 'info',
@@ -31,15 +45,42 @@ autoUpdater.on('update-downloaded', (info) => {
 
 autoUpdater.on('error', (err) => {
   console.error('[updater] Erro ao verificar/baixar atualização:', err == null ? 'desconhecido' : (err.stack || err).toString());
+  if (manualUpdateCheck && win) {
+    dialog.showMessageBox(win, {
+      type: 'error',
+      title: 'Verificar atualizações',
+      message: 'Não foi possível verificar atualizações.',
+      detail: err == null ? 'Erro desconhecido.' : (err.message || err.toString()),
+    });
+  }
+  manualUpdateCheck = false;
 });
 
-function checkForUpdates() {
+function checkForUpdates(manual = false) {
   if (!app.isPackaged) {
     console.log('[updater] Ignorado — app rodando em modo de desenvolvimento (não empacotado).');
+    if (manual && win) {
+      dialog.showMessageBox(win, {
+        type: 'info',
+        title: 'Verificar atualizações',
+        message: 'Verificação de atualizações indisponível em modo de desenvolvimento.',
+        detail: 'Isso só funciona no aplicativo instalado (.exe), não ao rodar via "npm start".',
+      });
+    }
     return;
   }
+  manualUpdateCheck = manual;
   autoUpdater.checkForUpdatesAndNotify().catch(err => {
     console.error('[updater] Falha ao verificar atualizações:', err);
+    if (manual && win) {
+      dialog.showMessageBox(win, {
+        type: 'error',
+        title: 'Verificar atualizações',
+        message: 'Não foi possível verificar atualizações.',
+        detail: err.message || err.toString(),
+      });
+    }
+    manualUpdateCheck = false;
   });
 }
 
@@ -119,7 +160,7 @@ function createWindow() {
     { label: 'Arquivo', submenu: [
       { label: 'Abrir pasta de dados', click: openDataFolder },
       { type: 'separator' },
-      { label: 'Verificar atualizações', click: checkForUpdates },
+      { label: 'Verificar atualizações', click: () => checkForUpdates(true) },
       { type: 'separator' },
       { label: 'Sair', click: () => { tray = null; app.quit(); } },
     ]},

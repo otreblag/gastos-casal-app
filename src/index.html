@@ -39,19 +39,17 @@
     [data-theme="dark"] body{background-image:radial-gradient(ellipse at 15% 60%,rgba(91,163,204,.07) 0%,transparent 55%),radial-gradient(ellipse at 85% 10%,rgba(91,163,204,.05) 0%,transparent 50%)}
 
     /* ─── HEADER ─────────────────────────────────────────────────────── */
-    .header{background:var(--surface);border-bottom:1px solid var(--border);padding:11px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;box-shadow:0 1px 0 var(--border)}
-    .logo{font-size:18px;margin-right:10px;opacity:.75}
-    .logo-img{width:24px;height:24px;margin-right:10px;object-fit:contain;flex-shrink:0}
-    .header-title{font-size:15px;font-weight:700;letter-spacing:.01em;color:var(--text)}
-    .header-title .brand-gold{color:#B8913A}
-    .header-sub{font-size:9.5px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin-top:1px}
-    .header-sub.brand-tagline{font-style:italic;text-transform:none;letter-spacing:.02em}
+    .header{background:var(--surface);border-bottom:2px solid #B8913A;padding:22px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+    [data-theme="dark"] .header{background:#111114}
+    .header-brand{display:flex;align-items:center}
+    .header-title{font-size:28px;font-weight:600;letter-spacing:.14em;color:var(--text);line-height:1}
+    .header-title .brand-gold{color:#C9A24B}
     .header-right{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
     .bot-pill{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted);background:var(--faint);padding:4px 11px;border-radius:6px;border:1px solid var(--border);letter-spacing:.03em;font-weight:500}
     .dot{width:6px;height:6px;border-radius:50%;background:#C8C5BE;flex-shrink:0;transition:background .3s}
     .dot.on{background:#3A9E6E;animation:pulse 2.5s infinite}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-    select.month{font-size:11px;border:1px solid var(--border);border-radius:6px;padding:5px 10px;background:var(--faint);color:var(--text);cursor:pointer;letter-spacing:.01em;font-weight:500;font-family:inherit}
+    select.month{width:auto;flex-shrink:0;font-size:11px;border:1px solid var(--border);border-radius:6px;padding:5px 10px;background:var(--faint);color:var(--text);cursor:pointer;letter-spacing:.01em;font-weight:500;font-family:inherit}
 
     /* Context switcher */
     .ctx-toggle{display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--faint)}
@@ -263,7 +261,6 @@
     [data-theme="dark"] .budget-bar-wrap{background:var(--faint)}
     [data-theme="dark"] .tabs{background:var(--surface)}
     [data-theme="dark"] .badge-installment{background:#2A1E08;color:#C8A060;border-color:#4A3810}
-    [data-theme="dark"] .header{box-shadow:0 1px 0 var(--border)}
     [data-theme="dark"] .card{box-shadow:var(--shadow-sm)}
     [data-theme="dark"] .card:hover{box-shadow:var(--shadow-md)}
     [data-theme="dark"] .metric{box-shadow:var(--shadow-sm)}
@@ -303,12 +300,8 @@
 <body>
 
 <div class="header">
-  <div style="display:flex;align-items:center;">
-    <img src="../assets/icon.png" alt="Finannza" class="logo-img" />
-    <div>
-      <div class="header-title">FIN<span class="brand-gold">ANN</span>ZA</div>
-      <div class="header-sub brand-tagline">Seu dinheiro, seus planos.</div>
-    </div>
+  <div class="header-brand">
+    <div class="header-title">FIN<span class="brand-gold">ANN</span>ZA</div>
   </div>
   <div class="header-right">
     <div class="ctx-toggle">
