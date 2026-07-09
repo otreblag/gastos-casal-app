@@ -44,7 +44,7 @@ autoUpdater.on('update-downloaded', (info) => {
       isQuitting = true;
       if (tray) { tray.destroy(); tray = null; }
       if (win) win.close();
-      autoUpdater.quitAndInstall(false, true);
+      autoUpdater.quitAndInstall(true, true);
     }
   });
 });
