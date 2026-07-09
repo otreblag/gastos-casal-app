@@ -286,13 +286,13 @@ Estado em `_listFilters` (pessoa, dateFrom, dateTo, valorMin, valorMax, metodo, 
 
 ## Backup e Restauração
 
-Card "Backup" na aba Config. `exportBackup()` grava um JSON com `_version`, `appVersion: '2.0'`, `backupDate`, todo o estado (`expenses`, `customCats`, `budgets`, `fixedExpenses`, `cards`, `monthGoals`, `merchantMap`, `acertos`, `deletedIds`) e `config` (cópia de `appConfig`).
+Card "Backup" na aba Config. `exportBackup()` chama `buildBackupPayload()` (função pura, testável) que monta um JSON com `_version`, `appVersion: '2.0'`, `backupDate`, todo o estado (`expenses`, `customCats`, `budgets`, `fixedExpenses`, `cards`, `monthGoals`, `merchantMap`, `acertos`, `deletedIds`) e `config` — **uma cópia de `appConfig` com as `SECRET_CONFIG_KEYS` removidas** (`tgToken`, `tgTokenEnc`, `sheetsSecret`, `sheetsSecretEnc`, `appsScriptUrl`). O backup **nunca contém credenciais** — ver "Armazenamento de segredos" na seção Segurança. Um aviso no card informa o usuário disso.
 
 `importBackup()` → `_processImport(data)` mostra um resumo (contagens, incluindo mapeamentos aprendidos e acertos) e pede confirmação → `executeRestore()`:
 1. Salva um snapshot de segurança do estado atual em `gastos-pre-restore.json` **antes** de sobrescrever qualquer coisa
 2. Roda `migrateData(data)` para normalizar/backfillar campos que possam faltar num backup antigo (`merchantMap`, `acertos`, etc. default para `{}`/`[]`)
 3. Restaura todos os arrays de estado + `merchantMap`/`acertos`
-4. **Nunca** sobrescreve `appConfig.dataFolderPath` — é uma configuração local da máquina, preservada via `keepLocal`
+4. **Nunca** sobrescreve `appConfig.dataFolderPath` nem as credenciais — todos preservados via `keepLocal` (o backup não traz credenciais, então restaurar mantém as do dispositivo atual). Após restaurar, `hydrateSecrets()` re-hidrata os segredos em memória.
 
 ---
 
@@ -592,3 +592,24 @@ npm run release    # gera o instalador e publica no GitHub Releases (precisa de 
 ```
 
 Requer Node.js + npm. `electron` e `electron-builder` são devDependencies.
+
+---
+
+## Histórico de Versões (Changelog)
+
+Versão lida via IPC (`getAppVersion()` → `app.getVersion()`), nunca hardcoded. Releases publicados no GitHub (`otreblag/gastos-casal-app`) via `npm run release`. Sempre confirmar `draft:false` após publicar (ver seção Auto-Update). Datas em 2026.
+
+| Versão | Data | Resumo |
+|---|---|---|
+| **1.1.8** | 07-09 | **Segredos criptografados em repouso.** `safeStorage` (DPAPI) para `tgToken`/`sheetsSecret` — localStorage guarda só as versões cifradas, texto puro só em memória; migração automática de texto puro + fallback gracioso. Backup deixa de incluir credenciais (`buildBackupPayload()` remove `SECRET_CONFIG_KEYS`) + aviso na UI. Logs mascarados (`scrubSecrets()`/`maskToken()`). `.gitignore` cobre `finannza-backup-*.json`/`.env`; repo do bot ganhou `.gitignore` + `.env.example`. |
+| **1.1.7** | 07-09 | **Hardening do Electron.** `sandbox: true` explícito. Dependências de CDN (Chart.js, SheetJS, fonte Manrope) auto-hospedadas em `src/vendor/` → app funciona offline, sem supply-chain. CSP restritiva via `onHeadersReceived` (`'unsafe-inline'` temporário; `connect-src` libera Telegram + Apps Script + `script.googleusercontent.com`). |
+| **1.1.6** | 07-09 | Badge de versão movido do canto inferior direito para o esquerdo (sobrepunha a scrollbar nativa de `.content`). |
+| **1.1.5** | 07-09 | Correção real da corrupção do ícone: `icon.ico` precisava ser multi-resolução (16–256px), não só um frame 256px — o downscale nativo do Windows corrompia o alfa (quadriculado na taskbar). Reempacotado via PIL. |
+| **1.1.4** | 07-09 | Auto-update parou de reabrir o wizard NSIS completo: `quitAndInstall(true, true)` (`isSilent=true` → flag `/S`). Badge de versão no header + card "Sobre" na Config (lidos via IPC). |
+| **1.1.3** | 07-09 | Atualização dos assets de ícone do app (`icon.ico`/`icon.png`/`tray-icon.png`). |
+| **1.1.2** | 07-09 | Fix "Não é possível fechar o Finannza" durante a instalação do auto-update (flag `isQuitting` para o handler de `close` parar de minimizar para a bandeja). |
+| **1.1.1** | 07-08 | Redesign do header ("FINANNZA", "ANN" dourado, sem logo). Feedback de "Verificar atualizações" (dialogs no modo manual). `releaseType: "release"` no `build.publish` (corrige releases presos como draft). Primeiro release publicado com sucesso. |
+| **1.1.0** | 07-08 | Rebrand de "Gastos do Casal" para **Finannza**. ⚠️ Release ficou preso como **draft** (bug do `releaseType`, corrigido na 1.1.1) — nunca chegou aos usuários. |
+| **1.0.0** | 07-08 | Commit inicial: app Electron de controle financeiro do casal, com auto-update (`electron-updater` + GitHub Releases). ⚠️ Release **draft** (mesmo bug). |
+
+> Notas: v1.0.0 e v1.1.0 permanecem como **draft** no GitHub (superseded, invisíveis ao `electron-updater`) — não republicar. A cadeia de auto-update efetiva começa na v1.1.1. Ao publicar uma nova versão, adicione a linha correspondente aqui.

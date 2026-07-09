@@ -1,6 +1,6 @@
 {
   "name": "finannza",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "description": "Controle financeiro do casal — sem API, 100% local",
   "main": "main.js",
   "scripts": {
