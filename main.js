@@ -130,6 +130,15 @@ ipcMain.handle('open-file-dialog', async (_event, options) => {
   return result.canceled ? null : result.filePaths[0];
 });
 
+ipcMain.handle('get-app-version', () => app.getVersion());
+
+ipcMain.handle('get-build-date', () => {
+  try { return fs.statSync(app.getAppPath()).mtime.toISOString(); }
+  catch { return null; }
+});
+
+ipcMain.on('check-for-updates', () => checkForUpdates(true));
+
 // ─── WINDOW ───────────────────────────────────────────────────────
 function createWindow() {
   const iconIcoPath = path.join(__dirname, 'assets', 'icon.ico');

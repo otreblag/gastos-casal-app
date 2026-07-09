@@ -45,6 +45,7 @@
     .header-title{font-size:28px;font-weight:600;letter-spacing:.14em;color:var(--text);line-height:1}
     .header-title .brand-gold{color:#C9A24B}
     .header-right{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+    .app-version-badge{position:fixed;bottom:6px;right:10px;font-size:10px;color:var(--muted);opacity:.5;letter-spacing:.02em;pointer-events:none;z-index:5;user-select:none}
     .bot-pill{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted);background:var(--faint);padding:4px 11px;border-radius:6px;border:1px solid var(--border);letter-spacing:.03em;font-weight:500}
     .dot{width:6px;height:6px;border-radius:50%;background:#C8C5BE;flex-shrink:0;transition:background .3s}
     .dot.on{background:#3A9E6E;animation:pulse 2.5s infinite}
@@ -780,6 +781,19 @@
         <div class="step-item"><div class="step-num">5</div><div>Clique em <strong>▶ Iniciar bot</strong> no topo → mande no grupo: <code>Mercado 87,50</code> 🎉</div></div>
       </div>
     </div>
+
+    <!-- Sobre -->
+    <div class="card">
+      <div class="card-title">ℹ️ Sobre</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.9">
+        <div><strong style="color:var(--text)">Finannza</strong></div>
+        <div>Versão <span id="about-version">—</span></div>
+        <div id="about-build-date-row" style="display:none">Última atualização: <span id="about-build-date">—</span></div>
+      </div>
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn btn-secondary" onclick="checkForUpdatesFromUI()">🔄 Verificar atualizações</button>
+      </div>
+    </div>
   </div>
 
 </div>
@@ -1000,5 +1014,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="classifier.js"></script>
 <script src="renderer.js"></script>
+<div id="app-version-badge" class="app-version-badge">v—</div>
 </body>
 </html>

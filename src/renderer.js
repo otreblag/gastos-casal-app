@@ -312,6 +312,36 @@ function renderCfgForm() {
 
 function getConfig() { return appConfig; }
 
+async function renderAppVersionInfo() {
+  if (!isElectron()) return;
+  const version = await window.electronAPI.getAppVersion();
+  if (version) {
+    const badge = document.getElementById('app-version-badge');
+    if (badge) badge.textContent = `v${version}`;
+    const aboutVersionEl = document.getElementById('about-version');
+    if (aboutVersionEl) aboutVersionEl.textContent = version;
+  }
+
+  const buildDate = await window.electronAPI.getBuildDate();
+  const rowEl  = document.getElementById('about-build-date-row');
+  const dateEl = document.getElementById('about-build-date');
+  if (rowEl && dateEl) {
+    if (buildDate) {
+      const d = new Date(buildDate);
+      dateEl.textContent = `${d.toLocaleDateString('pt-BR')} às ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+      rowEl.style.display = '';
+    } else {
+      rowEl.style.display = 'none';
+    }
+  }
+}
+
+function checkForUpdatesFromUI() {
+  if (!isElectron()) { notify('Função disponível apenas no app instalado.', 'warn'); return; }
+  notify('Verificando atualizações...', 'info');
+  window.electronAPI.checkForUpdates();
+}
+
 function refreshAllDynamicSelects() {
   renderPersonPills();
   populateBudgetCatSelect();
@@ -3597,6 +3627,7 @@ async function init() {
   await loadAll();
   loadConfig();
   setupCurrencyInputs();
+  renderAppVersionInfo();
   appConfig.botWasRunning = false; // bot externo (Render) é o único autorizado
   startSheetsSync(); // start syncing from Google Sheets
   buildMonthSelector();
