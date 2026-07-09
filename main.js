@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, ipcMain, dialog, nativeImage } = require('electron');
+const { app, BrowserWindow, Menu, Tray, ipcMain, dialog, nativeImage, session } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -152,6 +152,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
       preload: path.join(__dirname, 'preload.js'),
     },
     title: 'Finannza',
@@ -230,8 +231,39 @@ function openDataFolder() {
     }).catch(() => {});
 }
 
+// ─── CONTENT SECURITY POLICY ──────────────────────────────────────
+// Aplicada a todas as respostas via cabeçalho HTTP. 'unsafe-inline' em
+// script/style é temporário (Etapa 2B): o HTML ainda tem <script> inline e
+// dezenas de onclick=/style= inline. connect-src libera só as origens que o
+// renderer realmente chama via fetch:
+//   - api.telegram.org        → bot interno (getUpdates/sendMessage/getMe)
+//   - script.google.com       → Apps Script (syncFromSheets)
+//   - script.googleusercontent.com → destino do redirect 302 do Apps Script
+const CSP_POLICY = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  "connect-src 'self' https://api.telegram.org https://script.google.com https://script.googleusercontent.com",
+  "object-src 'none'",
+  "base-uri 'none'",
+].join('; ');
+
+function applyCsp() {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [CSP_POLICY],
+      },
+    });
+  });
+}
+
 // ─── APP LIFECYCLE ────────────────────────────────────────────────
 app.whenReady().then(() => {
+  applyCsp();
   createWindow();
   createTray();
   checkForUpdates();

@@ -36,6 +36,7 @@ src/
   index.html         # Todo o CSS + estrutura HTML (~1000 linhas)
   renderer.js        # Toda a lógica de negócio + renderização (~3660 linhas)
   classifier.js      # Motor de classificação local (sem API, keyword-based)
+  vendor/            # Libs auto-hospedadas (não-CDN): chart.umd.js, xlsx.full.min.js, fonts/manrope-*.woff2
 .claude/
   settings.json      # Permissões auto-aprovadas do Claude Code
 package.json         # Electron 29 + electron-builder
@@ -239,7 +240,7 @@ Cada cartão em `cards[]`: `{ id, nome, final (4 dígitos), titular, divisao (% 
 
 O resultado fica em `expense.mesCompetencia` (`'YYYY-MM'`). **Todo lugar que filtra despesas por mês para métricas de orçamento** (`contextMonthExpenses()`, `_calcAnnualBalance()`, evolução mensal) usa `mesCompetencia` para lançamentos de Crédito em vez de `data`. Badge `💳 a pagar <mês>` / `💳 pago` aparece em `expenseItemHTML()` quando `mesCompetencia` diverge do mês da compra.
 
-**Importação de fatura** (botão "📄 Importar fatura" na aba Lançamentos → `openInvoiceImport()`): `handleInvoiceFile()` lê um `.xls`/`.xlsx` (formato fatura C6 Bank) via SheetJS (`XLSX`, carregado por CDN), extrai `Data de compra`, `Descrição`, `Valor (em R$)`, `Parcela` e `Final do Cartão`. `_renderInvoicePreview()` (modal `#invoice-modal`) detecta o cartão automaticamente pelos 4 últimos dígitos (`finalToCard`), aplica `merchantMap` (auto-correção ou sugestão) e mostra uma tabela de pré-visualização antes de confirmar a importação. Lançamentos importados recebem `origem: 'fatura'`. O card "💳 Cartão de Crédito" na aba Config guarda apenas o fechamento/vencimento *padrão* (fallback para gastos sem `cardId`) e o botão "🔄 Recalcular competências" (`recalcularCompetencias()`).
+**Importação de fatura** (botão "📄 Importar fatura" na aba Lançamentos → `openInvoiceImport()`): `handleInvoiceFile()` lê um `.xls`/`.xlsx` (formato fatura C6 Bank) via SheetJS (`XLSX`, auto-hospedado em `src/vendor/xlsx.full.min.js`), extrai `Data de compra`, `Descrição`, `Valor (em R$)`, `Parcela` e `Final do Cartão`. `_renderInvoicePreview()` (modal `#invoice-modal`) detecta o cartão automaticamente pelos 4 últimos dígitos (`finalToCard`), aplica `merchantMap` (auto-correção ou sugestão) e mostra uma tabela de pré-visualização antes de confirmar a importação. Lançamentos importados recebem `origem: 'fatura'`. O card "💳 Cartão de Crédito" na aba Config guarda apenas o fechamento/vencimento *padrão* (fallback para gastos sem `cardId`) e o botão "🔄 Recalcular competências" (`recalcularCompetencias()`).
 
 ---
 
@@ -259,7 +260,7 @@ Corrige e memoriza descrições de fatura que a classificação por palavra-chav
 
 `monthGoals[]`: `{ month ('YYYY-MM'), teto, renda }` — uma entrada por mês, gerenciada na aba Orçamento (card "🎯 Meta do mês"). `saveMonthGoal()` substitui a entrada do mês atual; `copyGoalFromPrevMonth()` clona a meta do mês anterior; `deleteMonthGoal()` remove. `renderMonthGoal()` mostra barra de progresso do gasto atual contra o teto e a linha "💰 Economia projetada" (projeção baseada no ritmo atual de gastos vs. `renda`).
 
-O gráfico de evolução (`renderEvolutionChart()` + `renderEvolutionSummary()`, Dashboard) usa Chart.js 4.4.1 via CDN — linha dos últimos 6 meses com `borderDash: [6, 4]` marcando o teto da meta (`spanGaps: true` para meses sem meta). O resumo mostra "Mês atual vs anterior: ±X% (R$ valor)".
+O gráfico de evolução (`renderEvolutionChart()` + `renderEvolutionSummary()`, Dashboard) usa Chart.js 4.4.1 (auto-hospedado em `src/vendor/chart.umd.js`) — linha dos últimos 6 meses com `borderDash: [6, 4]` marcando o teto da meta (`spanGaps: true` para meses sem meta). O resumo mostra "Mês atual vs anterior: ±X% (R$ valor)".
 
 ---
 
@@ -472,6 +473,9 @@ Tema alternado por `toggleTheme()` via atributo `data-theme="dark"` no `<html>`.
 - ~~Auto-update reabria o wizard completo do instalador (per-user/all-users)~~ — `quitAndInstall(false, true)` estava com `isSilent=false`, rodando o NSIS 100% interativo; corrigido para `quitAndInstall(true, true)` (`isSilent=true` → flag `/S`, pula todas as páginas independente de `oneClick`)
 - ~~Versão do app não aparecia em lugar nenhum na UI~~ — badge discreto no canto da tela + card "Sobre" na Config, ambos lidos via IPC (`getAppVersion()`/`getBuildDate()`)
 - ~~Badge de versão sobrepunha a scrollbar~~ — estava fixo no canto inferior direito, mesmo canto onde a scrollbar nativa de `.content` aparece em telas com conteúdo longo; movido para o canto inferior esquerdo
+- ~~`sandbox` não era explícito em `webPreferences`~~ — adicionado `sandbox: true` (era o default do Electron ≥20, agora blindado contra regressão); preload em `contextBridge` funciona em sandbox, nada quebrou
+- ~~Dependências carregadas por CDN (cdnjs, Google Fonts)~~ — Chart.js, SheetJS e a fonte Manrope auto-hospedados em `src/vendor/`; app agora funciona offline e sem risco de supply-chain
+- ~~Ausência total de CSP~~ — CSP restritiva aplicada via `onHeadersReceived` (Etapa 2B, com `'unsafe-inline'` temporário para script/style); `connect-src` libera Telegram + Apps Script (incl. o host de redirect `script.googleusercontent.com`). Falta ainda a Etapa 2A (remover `'unsafe-inline'` refatorando os `onclick`/`style` inline)
 
 ---
 
@@ -480,11 +484,30 @@ Tema alternado por `toggleTheme()` via atributo `data-theme="dark"` no `<html>`.
 ### Electron hardening (`main.js`) — já implementado
 ```js
 webPreferences: {
-  nodeIntegration: false, contextIsolation: true,
+  nodeIntegration: false, contextIsolation: true, sandbox: true,
   preload: path.join(__dirname, 'preload.js'),
 }
 ```
-Toda comunicação com o processo principal passa por `preload.js` (`contextBridge.exposeInMainWorld('electronAPI', ...)`). Não reintroduza `nodeIntegration: true` nem `contextIsolation: false`.
+Toda comunicação com o processo principal passa por `preload.js` (`contextBridge.exposeInMainWorld('electronAPI', ...)`). Não reintroduza `nodeIntegration: true` nem `contextIsolation: false`, e não desative o `sandbox`. O `sandbox: true` já era o default do Electron ≥20 quando `nodeIntegration:false` — foi tornado **explícito** para blindar contra regressão. O `preload.js` usa só `contextBridge` + `ipcRenderer`, ambos permitidos em preload sandboxed, então nada quebra.
+
+### Content Security Policy (CSP)
+Aplicada a **todas** as respostas via `session.defaultSession.webRequest.onHeadersReceived` no `main.js` (função `applyCsp()`, chamada em `app.whenReady()` **antes** de `createWindow()`). Confirmado que o `onHeadersReceived` dispara para o protocolo `file://` neste Electron (29) — o header chega em cada resposta (documento, scripts do vendor, fontes). Política atual (constante `CSP_POLICY`):
+```
+default-src 'self';
+script-src 'self' 'unsafe-inline';
+style-src 'self' 'unsafe-inline';
+img-src 'self' data:;
+font-src 'self';
+connect-src 'self' https://api.telegram.org https://script.google.com https://script.googleusercontent.com;
+object-src 'none';
+base-uri 'none'
+```
+- **`'unsafe-inline'` em `script-src`/`style-src` é temporário (Etapa 2B pragmática).** O HTML tem um `<script>` inline (bloco de tema) e ~60+ atributos `onclick=`/dezenas de `style=` inline. Removê-los exige refatorar tudo para `addEventListener`/classes (Etapa 2A, ainda pendente). Sem `'unsafe-inline'`, todos os `onclick` e o CSS inline quebram. Chart.js 4 e SheetJS **não** precisam de `'unsafe-eval'` (verificado exercitando todos os fluxos sob a CSP — zero violações).
+- **`connect-src` lista só as origens que o renderer chama via `fetch`:** `api.telegram.org` (bot interno — `getUpdates`/`sendMessage`/`getMe`), `script.google.com` (Apps Script `syncFromSheets`) e `script.googleusercontent.com` (**destino do redirect 302** do Apps Script — sem ele o sync quebra na etapa do redirect). Ao adicionar qualquer nova chamada `fetch` para host externo, **adicione o host aqui** ou a requisição será bloqueada.
+- **Cuidado ao testar CSP batendo na raiz de um host** (`https://api.telegram.org/`, `https://script.google.com/`): essas raízes respondem 302 redirecionando para **outra** origem não-allowlistada (telegram.org, google.com), e o Chromium reporta a violação do redirect contra a **URL original**, dando falso-positivo de "host allowlistado bloqueado". As chamadas reais do app (path completo, ex. `/bot<token>/getUpdates` ou `.../exec`) não têm esse redirect cross-origin e passam normalmente — confirmado com `fetch('https://api.telegram.org/bot000000:invalid/getMe')` retornando HTTP 401 (resposta do próprio Telegram) sem violação de CSP.
+
+### Dependências de terceiros — auto-hospedadas (`src/vendor/`)
+Chart.js 4.4.1 (`vendor/chart.umd.js`), SheetJS/xlsx 0.18.5 (`vendor/xlsx.full.min.js`) e a fonte Manrope (`vendor/fonts/manrope-latin-{400,500,600,700,800}-normal.woff2`, subset latin — cobre acentuação pt-BR) são servidos **localmente**, não mais por CDN (cdnjs/Google Fonts). Isso: (a) permite a CSP com `default-src 'self'`/`script-src 'self'`; (b) elimina risco de supply-chain do CDN; (c) faz o app funcionar **offline**, alinhado à filosofia "100% local". `package.json → build.files` já inclui `src/**/*`, então o `vendor/` entra no instalador automaticamente. Ao atualizar uma dessas libs, **rebaixe o arquivo para `vendor/` e ajuste a tag `<script>`** — nunca volte a apontar para CDN.
 
 ### Prioridade 1 — Sanitização de HTML
 `escapeHtml()` já existe no renderer e é aplicado consistentemente em `descricao`/`categoria`/`pessoa`/`data` nos pontos de `innerHTML` já auditados (`expenseItemHTML()`, relatórios, listas de parcelas/cartões). Ao adicionar novo template literal com dado do usuário, sempre passe por `escapeHtml()`.
@@ -493,7 +516,9 @@ Toda comunicação com o processo principal passa por `preload.js` (`contextBrid
 Mova para `electron-store` com criptografia opcional ou `safeStorage` do Electron.
 
 ### Nunca fazer
-- Aumentar escopo de `nodeIntegration` ou desativar `contextIsolation`
+- Aumentar escopo de `nodeIntegration`, desativar `contextIsolation` ou desativar `sandbox`
+- Remover a CSP ou afrouxá-la para `default-src *`/adicionar `'unsafe-eval'`
+- Voltar a carregar Chart.js/xlsx/fontes por CDN (reintroduz supply-chain e viola a CSP)
 - Executar conteúdo do Telegram como código
 - Armazenar token no código-fonte
 - Reativar o bot interno (`startBot`) na inicialização — conflito 409 com bot do Render
