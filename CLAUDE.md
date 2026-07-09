@@ -471,6 +471,7 @@ Tema alternado por `toggleTheme()` via atributo `data-theme="dark"` no `<html>`.
 - ~~`quitAndInstall()` travava com "Não é possível fechar o Finannza"~~ — flag `isQuitting` faz o handler de `close` parar de interceptar e minimizar para bandeja durante o auto-update/sair
 - ~~Auto-update reabria o wizard completo do instalador (per-user/all-users)~~ — `quitAndInstall(false, true)` estava com `isSilent=false`, rodando o NSIS 100% interativo; corrigido para `quitAndInstall(true, true)` (`isSilent=true` → flag `/S`, pula todas as páginas independente de `oneClick`)
 - ~~Versão do app não aparecia em lugar nenhum na UI~~ — badge discreto no canto da tela + card "Sobre" na Config, ambos lidos via IPC (`getAppVersion()`/`getBuildDate()`)
+- ~~Badge de versão sobrepunha a scrollbar~~ — estava fixo no canto inferior direito, mesmo canto onde a scrollbar nativa de `.content` aparece em telas com conteúdo longo; movido para o canto inferior esquerdo
 
 ---
 
