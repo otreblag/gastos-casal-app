@@ -14,4 +14,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkForUpdates:    ()                 => ipcRenderer.send('check-for-updates'),
   encryptSecret:      (plain)            => ipcRenderer.invoke('encrypt-secret', plain),
   decryptSecret:      (b64)              => ipcRenderer.invoke('decrypt-secret', b64),
+  backupSeal:         (plaintext, pass)  => ipcRenderer.invoke('backup-seal', plaintext, pass),
+  backupOpen:         (bundle, pass)     => ipcRenderer.invoke('backup-open', bundle, pass),
 });

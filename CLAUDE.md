@@ -286,13 +286,25 @@ Estado em `_listFilters` (pessoa, dateFrom, dateTo, valorMin, valorMax, metodo, 
 
 ## Backup e Restauração
 
-Card "Backup" na aba Config. `exportBackup()` chama `buildBackupPayload()` (função pura, testável) que monta um JSON com `_version`, `appVersion: '2.0'`, `backupDate`, todo o estado (`expenses`, `customCats`, `budgets`, `fixedExpenses`, `cards`, `monthGoals`, `merchantMap`, `acertos`, `deletedIds`) e `config` — **uma cópia de `appConfig` com as `SECRET_CONFIG_KEYS` removidas** (`tgToken`, `tgTokenEnc`, `sheetsSecret`, `sheetsSecretEnc`, `appsScriptUrl`). O backup **nunca contém credenciais** — ver "Armazenamento de segredos" na seção Segurança. Um aviso no card informa o usuário disso.
+Card "Backup" na aba Config, com três botões: **⬇️ Exportar backup** (sem senha), **🔒 Exportar com senha** (`exportBackupEncrypted()`) e **⬆️ Restaurar backup**. `buildBackupPayload()` (função pura, testável) monta o *payload*: `_version`, `appVersion: '2.0'`, `backupDate`, todo o estado (`expenses`, `customCats`, `budgets`, `fixedExpenses`, `cards`, `monthGoals`, `merchantMap`, `acertos`, `deletedIds`) e `config` — **uma cópia de `appConfig` com as `SECRET_CONFIG_KEYS` removidas** (`tgToken`, `tgTokenEnc`, `sheetsSecret`, `sheetsSecretEnc`, `appsScriptUrl`). O backup **nunca contém credenciais** — ver "Armazenamento de segredos" na Segurança. Um aviso no card informa que o backup contém dados financeiros legíveis e deve ser guardado com cuidado.
 
-`importBackup()` → `_processImport(data)` mostra um resumo (contagens, incluindo mapeamentos aprendidos e acertos) e pede confirmação → `executeRestore()`:
-1. Salva um snapshot de segurança do estado atual em `gastos-pre-restore.json` **antes** de sobrescrever qualquer coisa
-2. Roda `migrateData(data)` para normalizar/backfillar campos que possam faltar num backup antigo (`merchantMap`, `acertos`, etc. default para `{}`/`[]`)
-3. Restaura todos os arrays de estado + `merchantMap`/`acertos`
-4. **Nunca** sobrescreve `appConfig.dataFolderPath` nem as credenciais — todos preservados via `keepLocal` (o backup não traz credenciais, então restaurar mantém as do dispositivo atual). Após restaurar, `hydrateSecrets()` re-hidrata os segredos em memória.
+### Formato do arquivo (formato 2 — wrapper com integridade)
+`_buildBackupFile(password)` embrulha o payload num wrapper `{ _finannza:'backup', _format:2, appVersion, backupDate, encrypted, checksum, ... }`:
+- **Sem senha:** `encrypted:false`, `payload` como objeto (legível), `checksum` = SHA-256 do `JSON.stringify(payload)`.
+- **Com senha:** `encrypted:true` + `cipher:'aes-256-gcm'`, `kdf:'scrypt'`, `salt`/`iv`/`authTag` (hex) e `data` (base64) — o payload em texto puro **não** aparece no arquivo. `checksum` é do payload em claro (verificado após descriptografar).
+
+Cripto no **main process** (Node `crypto`), exposta via IPC (`preload.js` → `window.electronAPI.backupSeal/backupOpen`):
+- `backup-seal(plaintext, password)` — calcula o SHA-256; se houver senha, deriva a chave AES-256 via `scryptSync(password, salt)` e cifra com AES-256-GCM (salt/iv aleatórios por backup).
+- `backup-open(bundle, password)` — descriptografa (GCM autentica: senha errada **ou** ciphertext adulterado → falha) e devolve `{ ok, value, checksumOk }`. Para bundle não-criptografado, o renderer passa `payloadStr` e só o checksum é conferido.
+
+### Importação e restauração
+`importBackup()` → `_handleImportContent()` detecta o formato: wrapper criptografado → abre o **modal de senha** (`#backup-pass-modal`, `_openBackupPassModal('import')` → `_decryptAndProcess()`); wrapper não-criptografado → `_verifyAndProcess()` (confere o checksum, **avisa e pede confirmação** se a integridade falhar); payload cru legado (backups ≤ v1.1.9) → direto. Todos caem em `_processImport(payload)` → resumo + confirmação → `executeRestore()`:
+1. **Snapshot de segurança rotacionado** — `_rotatePreRestore()` mantém as **3 versões mais recentes** (`gastos-pre-restore-1.json` = mais nova … `-3` = mais antiga; desloca 2→3, 1→2, grava a nova em 1) **antes** de sobrescrever qualquer coisa. Usa só `readFile`/`writeFile`/`fileExists` (sem listar diretório).
+2. `migrateData(data)` normaliza/coage tipos (`asArray`/`asObject`).
+3. Restaura todos os arrays de estado + `merchantMap`/`acertos`.
+4. **Nunca** sobrescreve `appConfig.dataFolderPath` nem as credenciais — preservados via `keepLocal`. Após restaurar, `hydrateSecrets()` re-hidrata os segredos em memória.
+
+O modal de senha (`_openBackupPassModal(mode)`/`_confirmBackupPass()`/`_closeBackupPassModal()`) serve tanto export (dois campos: senha + confirmação, mín. 4 chars) quanto import (só senha). **A senha não é recuperável** — se o usuário esquecer, o backup criptografado é irrecuperável (avisado no hint).
 
 ---
 

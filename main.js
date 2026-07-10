@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, Tray, ipcMain, dialog, nativeImage, session, safeStorage } = require('electron');
-const path = require('path');
-const fs   = require('fs');
+const path   = require('path');
+const fs     = require('fs');
+const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 
 let win  = null;
@@ -149,6 +150,55 @@ ipcMain.handle('decrypt-secret', (_event, b64) => {
     if (typeof b64 !== 'string' || b64 === '') return { available: true, value: '' };
     return { available: true, value: safeStorage.decryptString(Buffer.from(b64, 'base64')) };
   } catch { return { available: true, value: null }; }
+});
+
+// ─── BACKUP: integridade (SHA-256) + criptografia opcional (AES-256-GCM) ──
+// backup-seal: calcula o checksum do conteúdo e, se houver senha, criptografa.
+//   password vazia/nula → { encrypted:false, checksum }.
+//   com senha → { encrypted:true, checksum, salt, iv, authTag, data(base64) }.
+// A chave AES-256 é derivada da senha via scrypt (salt aleatório por backup).
+const _sha256 = txt => crypto.createHash('sha256').update(txt, 'utf8').digest('hex');
+
+ipcMain.handle('backup-seal', (_event, plaintext, password) => {
+  try {
+    const checksum = _sha256(String(plaintext));
+    if (!password) return { ok: true, encrypted: false, checksum };
+    const salt = crypto.randomBytes(16);
+    const iv   = crypto.randomBytes(12);
+    const key  = crypto.scryptSync(String(password), salt, 32);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const enc = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
+    return {
+      ok: true, encrypted: true, checksum,
+      cipher: 'aes-256-gcm', kdf: 'scrypt',
+      salt: salt.toString('hex'), iv: iv.toString('hex'),
+      authTag: cipher.getAuthTag().toString('hex'),
+      data: enc.toString('base64'),
+    };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// backup-open: para bundle criptografado, descriptografa com a senha e confere
+// o checksum; para não-criptografado, o renderer passa payloadStr e só conferimos
+// o checksum. Retorna { ok, value, checksumOk } ou { ok:false, error }.
+ipcMain.handle('backup-open', (_event, bundle, password) => {
+  try {
+    if (!bundle || typeof bundle !== 'object') return { ok: false, error: 'bundle inválido' };
+    if (bundle.encrypted) {
+      if (!password) return { ok: false, error: 'senha-necessaria' };
+      const key = crypto.scryptSync(String(password), Buffer.from(bundle.salt, 'hex'), 32);
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(bundle.iv, 'hex'));
+      decipher.setAuthTag(Buffer.from(bundle.authTag, 'hex'));
+      const dec = Buffer.concat([decipher.update(Buffer.from(bundle.data, 'base64')), decipher.final()]).toString('utf8');
+      return { ok: true, value: dec, checksumOk: _sha256(dec) === bundle.checksum };
+    }
+    // Não criptografado — verificação de integridade sobre a string do payload.
+    const payloadStr = String(bundle.payloadStr || '');
+    return { ok: true, value: payloadStr, checksumOk: _sha256(payloadStr) === bundle.checksum };
+  } catch (e) {
+    // Falha de GCM (senha errada ou arquivo adulterado) cai aqui.
+    return { ok: false, error: 'senha-ou-integridade' };
+  }
 });
 
 ipcMain.handle('get-app-version', () => app.getVersion());

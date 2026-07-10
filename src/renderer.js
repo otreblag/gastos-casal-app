@@ -1514,18 +1514,63 @@ function buildBackupPayload() {
   };
 }
 
-async function exportBackup() {
+// SHA-256 hex via Web Crypto (usado no modo web; no Electron o hash vem do main).
+async function _sha256Subtle(str) {
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch { return ''; }
+}
+
+// Monta o arquivo de backup (formato 2): wrapper com checksum de integridade e,
+// se `password` for informada, conteúdo criptografado (AES-256-GCM via IPC).
+// Retorna a string JSON pronta para gravar, ou null se falhar/cancelar.
+async function _buildBackupFile(password) {
+  const payload    = buildBackupPayload();
+  const payloadStr = JSON.stringify(payload);
+  const wrapper = {
+    _finannza:  'backup',
+    _format:    2,
+    appVersion: payload.appVersion,
+    backupDate: payload.backupDate,
+    encrypted:  false,
+    checksum:   '',
+  };
+  if (isElectron()) {
+    const sealed = await window.electronAPI.backupSeal(payloadStr, password || '');
+    if (!sealed || !sealed.ok) { notify('Falha ao preparar o backup.', 'err'); return null; }
+    wrapper.checksum = sealed.checksum;
+    if (sealed.encrypted) {
+      Object.assign(wrapper, {
+        encrypted: true, cipher: sealed.cipher, kdf: sealed.kdf,
+        salt: sealed.salt, iv: sealed.iv, authTag: sealed.authTag, data: sealed.data,
+      });
+    } else {
+      wrapper.payload = payload;
+    }
+  } else {
+    if (password) { notify('Backup com senha disponível apenas no app instalado.', 'warn'); return null; }
+    wrapper.checksum = await _sha256Subtle(payloadStr);
+    wrapper.payload  = payload;
+  }
+  return JSON.stringify(wrapper, null, 2);
+}
+
+// Exporta sem senha (botão padrão).
+function exportBackup() { return _exportBackupWith(''); }
+// Abre o modal para exportar com senha.
+function exportBackupEncrypted() { _openBackupPassModal('export'); }
+
+async function _exportBackupWith(password) {
+  const content = await _buildBackupFile(password);
+  if (content == null) return;
   const now      = new Date();
-  const dateStr  = now.toISOString().slice(0, 10);
-  const filename = `finannza-backup-${dateStr}.json`;
-  const backup   = buildBackupPayload();
-  const content = JSON.stringify(backup, null, 2);
+  const filename = `finannza-backup-${now.toISOString().slice(0, 10)}${password ? '-protegido' : ''}.json`;
 
   if (isElectron()) {
     const savePath = await window.electronAPI.saveFileDialog({
-      title:       'Salvar backup',
-      defaultPath: filename,
-      filters:     [{ name: 'JSON', extensions: ['json'] }],
+      title: 'Salvar backup', defaultPath: filename,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
     });
     if (!savePath) return;
     const ok = await window.electronAPI.writeFile(savePath, content);
@@ -1534,16 +1579,14 @@ async function exportBackup() {
     const blob = new Blob([content], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const a    = Object.assign(document.createElement('a'), { href: url, download: filename });
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
 
   appConfig.lastBackupDate = now.getTime();
   saveConfigToStorage();
   renderCfgForm();
-  notify('Backup exportado com sucesso!', 'ok');
+  notify(password ? 'Backup protegido por senha exportado! 🔒' : 'Backup exportado com sucesso!', 'ok');
 }
 
 async function importBackup() {
@@ -1555,9 +1598,7 @@ async function importBackup() {
     if (!filePath) return;
     const content = await window.electronAPI.readFile(filePath);
     if (!content) { notify('Não foi possível ler o arquivo selecionado.', 'err'); return; }
-    let data;
-    try { data = JSON.parse(content); } catch { notify('Arquivo inválido — não é um JSON válido.', 'err'); return; }
-    _processImport(data);
+    _handleImportContent(content);
   } else {
     const input    = document.createElement('input');
     input.type     = 'file';
@@ -1565,15 +1606,109 @@ async function importBackup() {
     input.onchange = e => {
       const file = e.target.files?.[0];
       if (!file) return;
-      const reader    = new FileReader();
-      reader.onload   = ev => {
-        let data;
-        try { data = JSON.parse(ev.target.result); } catch { notify('Arquivo inválido — não é um JSON válido.', 'err'); return; }
-        _processImport(data);
-      };
+      const reader  = new FileReader();
+      reader.onload = ev => _handleImportContent(ev.target.result);
       reader.readAsText(file);
     };
     input.click();
+  }
+}
+
+async function _handleImportContent(content) {
+  let parsed;
+  try { parsed = JSON.parse(content); } catch { notify('Arquivo inválido — não é um JSON válido.', 'err'); return; }
+
+  // Formato 2 (wrapper com checksum e/ou criptografia)
+  if (parsed && parsed._finannza === 'backup') {
+    if (parsed.encrypted) {
+      if (!isElectron()) { notify('Este backup é protegido por senha — abra no app instalado.', 'warn'); return; }
+      _pendingEncryptedBundle = parsed;
+      _openBackupPassModal('import');
+      return;
+    }
+    await _verifyAndProcess(parsed);
+    return;
+  }
+
+  // Legado (payload cru, sem wrapper — backups da v1.1.9 e anteriores)
+  if (parsed && Array.isArray(parsed.expenses)) { _processImport(parsed); return; }
+
+  notify('Arquivo inválido — estrutura de backup não reconhecida.', 'err');
+}
+
+// Verifica a integridade (checksum) de um backup não-criptografado antes de restaurar.
+async function _verifyAndProcess(wrapper) {
+  let checksumOk = true;
+  if (wrapper.checksum) {
+    const payloadStr = JSON.stringify(wrapper.payload);
+    if (isElectron()) {
+      const res = await window.electronAPI.backupOpen({ encrypted: false, checksum: wrapper.checksum, payloadStr }, '');
+      checksumOk = !!(res && res.ok && res.checksumOk);
+    } else {
+      checksumOk = (await _sha256Subtle(payloadStr)) === wrapper.checksum;
+    }
+  }
+  if (!checksumOk && !confirm('⚠️ A verificação de integridade falhou — o arquivo pode ter sido corrompido ou alterado depois de exportado.\n\nDeseja restaurar mesmo assim?')) return;
+  _processImport(wrapper.payload);
+}
+
+// Descriptografa um backup protegido por senha e valida a integridade.
+async function _decryptAndProcess(password) {
+  const bundle = _pendingEncryptedBundle;
+  const msg    = document.getElementById('backup-pass-msg');
+  if (!bundle) return;
+  const res = await window.electronAPI.backupOpen(bundle, password);
+  if (!res || !res.ok) { if (msg) msg.textContent = 'Senha incorreta ou arquivo corrompido/adulterado.'; return; }
+  let payload;
+  try { payload = JSON.parse(res.value); }
+  catch { if (msg) msg.textContent = 'Conteúdo inválido após descriptografar.'; return; }
+  _pendingEncryptedBundle = null;
+  _closeBackupPassModal();
+  if (!res.checksumOk && !confirm('⚠️ A verificação de integridade falhou após descriptografar. Restaurar mesmo assim?')) return;
+  _processImport(payload);
+}
+
+// ─── Modal de senha do backup (export/import) ─────────────────────
+let _backupPassMode        = null; // 'export' | 'import'
+let _pendingEncryptedBundle = null;
+
+function _openBackupPassModal(mode) {
+  _backupPassMode = mode;
+  const $ = id => document.getElementById(id);
+  $('backup-pass-input').value   = '';
+  $('backup-pass-confirm').value = '';
+  $('backup-pass-msg').textContent = '';
+  if (mode === 'export') {
+    $('backup-pass-title').textContent   = '🔒 Exportar backup com senha';
+    $('backup-pass-hint').textContent    = 'A senha criptografa o backup (AES-256). Você precisará dela para restaurar — guarde-a bem, não há como recuperá-la se esquecer.';
+    $('backup-pass-confirm-row').style.display = '';
+    $('backup-pass-ok').textContent      = 'Exportar';
+  } else {
+    $('backup-pass-title').textContent   = '🔒 Backup protegido por senha';
+    $('backup-pass-hint').textContent    = 'Este backup está criptografado. Digite a senha usada ao exportá-lo.';
+    $('backup-pass-confirm-row').style.display = 'none';
+    $('backup-pass-ok').textContent      = 'Restaurar';
+  }
+  $('backup-pass-modal').classList.add('open');
+  setTimeout(() => $('backup-pass-input').focus(), 50);
+}
+
+function _closeBackupPassModal() {
+  document.getElementById('backup-pass-modal').classList.remove('open');
+  _backupPassMode = null;
+  _pendingEncryptedBundle = null;
+}
+
+async function _confirmBackupPass() {
+  const pass = document.getElementById('backup-pass-input').value;
+  const msg  = document.getElementById('backup-pass-msg');
+  if (!pass || pass.length < 4) { msg.textContent = 'A senha precisa de ao menos 4 caracteres.'; return; }
+  if (_backupPassMode === 'export') {
+    if (pass !== document.getElementById('backup-pass-confirm').value) { msg.textContent = 'As senhas não conferem.'; return; }
+    _closeBackupPassModal();
+    await _exportBackupWith(pass);
+  } else {
+    await _decryptAndProcess(pass);
   }
 }
 
@@ -1606,9 +1741,25 @@ function _processImport(data) {
     </div>
     <div style="background:var(--warn-soft);border:1px solid var(--warn);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--warn)">
       ⚠️ Os dados atuais serão <strong>substituídos</strong>.
-      ${isElectron() ? 'Um arquivo <code>gastos-pre-restore.json</code> de segurança será criado automaticamente.' : ''}
+      ${isElectron() ? 'Um backup de segurança do estado atual é criado automaticamente (<code>gastos-pre-restore-1..3.json</code>, últimas 3 versões).' : ''}
     </div>`;
   document.getElementById('restore-modal').classList.add('open');
+}
+
+// Rotaciona os snapshots de segurança: mantém os 3 mais recentes
+// (gastos-pre-restore-1 = mais novo … -3 = mais antigo). Usa só readFile/
+// writeFile/fileExists (não precisa de listagem de diretório).
+async function _rotatePreRestore(baseDir, newContent) {
+  const pathFor = n => window.electronAPI.pathJoin(baseDir, `gastos-pre-restore-${n}.json`);
+  const p1 = await pathFor(1), p2 = await pathFor(2), p3 = await pathFor(3);
+  // Desloca 2→3 e 1→2 (o -3 antigo é sobrescrito/descartado).
+  if (await window.electronAPI.fileExists(p2)) {
+    const c = await window.electronAPI.readFile(p2); if (c != null) await window.electronAPI.writeFile(p3, c);
+  }
+  if (await window.electronAPI.fileExists(p1)) {
+    const c = await window.electronAPI.readFile(p1); if (c != null) await window.electronAPI.writeFile(p2, c);
+  }
+  await window.electronAPI.writeFile(p1, newContent);
 }
 
 async function executeRestore() {
@@ -1617,15 +1768,15 @@ async function executeRestore() {
   _pendingRestoreData = null;
   closeModal('restore-modal');
 
-  // Safety snapshot of current state (Electron only)
+  // Safety snapshot of current state (Electron only) — mantém as últimas 3 versões.
   if (isElectron()) {
     try {
       const folder  = appConfig.dataFolderPath;
       const base    = folder || (await window.electronAPI.getDefaultDataPath());
-      const prePath = await window.electronAPI.pathJoin(base, 'gastos-pre-restore.json');
-      await window.electronAPI.writeFile(prePath, JSON.stringify(
+      const snapshot = JSON.stringify(
         { expenses, customCats, budgets, fixedExpenses, cards, monthGoals, merchantMap, acertos, deletedIds: [...deletedExpenseIds] }, null, 2
-      ));
+      );
+      await _rotatePreRestore(base, snapshot);
     } catch { /* non-fatal */ }
   }
 

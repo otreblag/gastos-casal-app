@@ -762,11 +762,13 @@
       <div class="card-title">🗄️ Backup</div>
       <div id="backup-info" style="font-size:12px;color:var(--muted);margin-bottom:12px">Nenhum backup exportado ainda.</div>
       <div style="font-size:11.5px;color:var(--muted);background:var(--faint);border:1px solid var(--border);border-left:3px solid var(--warn);border-radius:7px;padding:9px 11px;margin-bottom:12px;line-height:1.55">
-        🔒 Por segurança, o backup <strong>não inclui credenciais</strong> (token do bot, secret do Sheets e URL do Apps Script). Ao restaurar em outro dispositivo, reconfigure essas informações manualmente na aba Configurações.
+        ⚠️ O backup contém seus <strong>dados financeiros</strong> (todos os lançamentos, valores e categorias) em texto legível. <strong>Guarde-o com cuidado</strong> e evite enviá-lo para serviços de nuvem sem proteção. Para compartilhar ou armazenar com segurança, use <strong>“Exportar com senha”</strong> (criptografa com AES-256).<br>
+        🔒 Credenciais (token do bot, secret do Sheets, URL do Apps Script) <strong>nunca</strong> são incluídas — reconfigure-as manualmente ao restaurar em outro dispositivo.
       </div>
-      <div class="btn-row" style="margin:0">
-        <button class="btn btn-secondary" onclick="exportBackup()">⬇️ Exportar backup</button>
-        <button class="btn btn-secondary" onclick="importBackup()">⬆️ Restaurar backup</button>
+      <div class="btn-row" style="margin:0;flex-wrap:wrap">
+        <button class="btn btn-secondary" onclick="exportBackup()" title="Exporta um arquivo .json com seus dados financeiros em texto legível. Guarde com cuidado.">⬇️ Exportar backup</button>
+        <button class="btn btn-secondary" onclick="exportBackupEncrypted()" title="Exporta o backup criptografado com uma senha (AES-256). Recomendado para nuvem/compartilhamento.">🔒 Exportar com senha</button>
+        <button class="btn btn-secondary" onclick="importBackup()" title="Restaura de um arquivo de backup (.json), com ou sem senha.">⬆️ Restaurar backup</button>
       </div>
     </div>
 
@@ -961,6 +963,28 @@
     <div class="btn-row" style="margin-top:14px">
       <button class="btn btn-secondary" onclick="closeModal('restore-modal')">Cancelar</button>
       <button class="btn btn-primary" style="background:var(--danger);border-color:var(--danger)" onclick="executeRestore()">✓ Confirmar restauração</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="backup-pass-modal" onclick="if(event.target===this)_closeBackupPassModal()">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-title"><span id="backup-pass-title">🔒 Backup com senha</span> <button class="modal-close" onclick="_closeBackupPassModal()">✕</button></div>
+    <div id="backup-pass-hint" style="font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:12px"></div>
+    <div style="margin-bottom:10px">
+      <label style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase">Senha</label>
+      <input type="password" id="backup-pass-input" placeholder="Senha do backup" autocomplete="off"
+             onkeydown="if(event.key==='Enter')_confirmBackupPass()" />
+    </div>
+    <div id="backup-pass-confirm-row" style="margin-bottom:10px">
+      <label style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase">Confirmar senha</label>
+      <input type="password" id="backup-pass-confirm" placeholder="Repita a senha" autocomplete="off"
+             onkeydown="if(event.key==='Enter')_confirmBackupPass()" />
+    </div>
+    <div id="backup-pass-msg" style="font-size:11.5px;color:var(--danger);min-height:15px;margin-bottom:6px"></div>
+    <div class="btn-row" style="margin-top:6px">
+      <button class="btn btn-secondary" onclick="_closeBackupPassModal()">Cancelar</button>
+      <button class="btn btn-primary" id="backup-pass-ok" onclick="_confirmBackupPass()">Confirmar</button>
     </div>
   </div>
 </div>
