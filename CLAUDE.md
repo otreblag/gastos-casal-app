@@ -139,15 +139,29 @@ O bot tem seu próprio array `CATEGORIES` embutido no `bot.js` — **não usa `c
 | customCats | Não suporta — categorias fixas no código | Suporta via `customCats[]` injetado em runtime |
 | Deep copy | Não necessário — array nunca é mutado | Implementado para proteger `DEFAULT_CATEGORIES` |
 
-**Arquivo de trabalho do bot:** `C:\Users\gabal\Downloads\bot.js` (cópia local mais atualizada).
+**Repositório do bot:** `D:\projetos\gastos-bot` (repo `otreblag/gastos-bot`, deploy Railway/Render). É a **fonte versionada** de `bot.js` e `apps-script.gs` — as cópias em `C:\Users\gabal\Downloads\*` são antigas, ignore-as.
 
-**Variáveis de ambiente lidas pelo bot** (`process.env`):
+**Variáveis de ambiente lidas pelo bot** (`process.env` — nunca hardcoded):
 - `TELEGRAM_TOKEN` — token do bot
 - `TELEGRAM_GROUP_ID` — ID do grupo autorizado
 - `APPS_SCRIPT_URL` — URL do Web App publicado no Google Apps Script
 - `SECRET_TOKEN` — token de autenticação entre bot e Apps Script
 
-**`salvarNaplanilha(gasto)`** — usa `fetch` nativo (Node 18+) com `redirect: 'follow'`. O Apps Script retorna 302 que o fetch segue automaticamente. Erro "Invalid URL" indica que `APPS_SCRIPT_URL` está vazia ou malformada no ambiente do Render.
+**`salvarNaplanilha(gasto)`** — usa `fetch` nativo (Node 18+) com `redirect: 'follow'`. O Apps Script retorna 302 que o fetch segue automaticamente. Erro "Invalid URL" indica que `APPS_SCRIPT_URL` está vazia ou malformada no ambiente do servidor.
+
+### Hardening do bot (`bot.js`)
+- **Validação da `APPS_SCRIPT_URL`** no startup — precisa começar com `https://script.google.com/`, senão `process.exit` (impede exfiltração para endpoint arbitrário).
+- **Rate limiting** — `isRateLimited(chatId)`: máx. 10 msgs por chat em 30s; excesso ignorado + aviso 1×/janela.
+- **Limite de tamanho** — mensagens acima de 500 caracteres são ignoradas.
+- **Mascaramento de log** — `maskSecrets()`/`maskToken()` em `polling_error` (que traz a URL da API com o token) e nos erros de salvamento; nunca loga token/secret/URL completos.
+
+### Apps Script (`apps-script.gs`)
+Web App publicado (Execute as: Me, **Who has access: Anyone** — intencional, ver comentário no arquivo; a proteção é o `SECRET_TOKEN`). `doPost`:
+- **Auth primeiro:** valida `SECRET_TOKEN` (Script Properties) **antes** de qualquer leitura/escrita na planilha.
+- **`sanitizarGasto()`** — valor numérico `0..1.000.000` (senão rejeita), strings truncadas, controle removido, `confianca` clampada.
+- **`idJaExiste()`** — idempotência: mesmo ID nas últimas 100 linhas → `{ ok:true, duplicado:true }` sem duplicar.
+- Só tem `doPost` (gravação). O `doGet`/`?acao=listar` que o app usa no sync (se existir) está em outra parte da implantação e **não** está neste arquivo.
+- **Republicar:** colar no editor (planilha → Extensões → Apps Script) e **editar a implantação existente** (Nova versão) — nunca criar nova implantação (gera URL nova e quebra o `APPS_SCRIPT_URL`).
 
 ---
 
@@ -626,6 +640,8 @@ Requer Node.js + npm. `electron` e `electron-builder` são devDependencies.
 ## Histórico de Versões (Changelog)
 
 Versão lida via IPC (`getAppVersion()` → `app.getVersion()`), nunca hardcoded. Releases publicados no GitHub (`otreblag/gastos-casal-app`) via `npm run release`. Sempre confirmar `draft:false` após publicar (ver seção Auto-Update). Datas em 2026.
+
+> **Próximas versões começam em `1.2.0`.** A série `1.1.x` fecha na **1.1.10** (última publicada). O próximo bump deve ir para `1.2.0` (não `1.1.11`) — decisão do usuário para marcar o encerramento do ciclo de hardening de segurança e o início de um novo ciclo. Ao publicar, atualize `package.json` para `1.2.0`, adicione a linha aqui e siga o fluxo normal de `npm run release`.
 
 | Versão | Data | Resumo |
 |---|---|---|
