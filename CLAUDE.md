@@ -496,6 +496,8 @@ Tema alternado por `toggleTheme()` via atributo `data-theme="dark"` no `<html>`.
 
 ## Segurança
 
+> Visão consolidada (arquitetura, armazenamento de credenciais, modelo de ameaça, resposta a incidentes e checklist) em [`SECURITY.md`](SECURITY.md) na raiz. Esta seção guarda os detalhes de implementação por função.
+
 ### Electron hardening (`main.js`) — já implementado
 ```js
 webPreferences: {
