@@ -42,7 +42,7 @@ src/
 package.json         # Electron 29 + electron-builder
 ```
 
-**Sem framework de UI, sem bundler, sem TypeScript.** Tudo é JS vanilla. O renderer roda com `nodeIntegration: false` + `contextIsolation: true`; a única ponte com o processo principal é `preload.js` (`contextBridge.exposeInMainWorld`), exposta como `window.electronAPI` (`readFile`, `writeFile`, `selectFolder`, `saveFileDialog`, `openFileDialog`, `getAppVersion`, `getBuildDate`, `checkForUpdates`, etc.). Isso é intencional para manter zero configuração de build.
+**Sem framework de UI, sem bundler, sem TypeScript.** Tudo é JS vanilla. O renderer roda com `nodeIntegration: false` + `contextIsolation: true`; a única ponte com o processo principal é `preload.js` (`contextBridge.exposeInMainWorld`), exposta como `window.electronAPI` (`readFile`, `writeFile`, `selectFolder`, `saveFileDialog`, `openFileDialog`, `getAppVersion`, `getBuildDate`, `checkForUpdates`, `encryptSecret`/`decryptSecret`, `backupSeal`/`backupOpen`, `listDir`/`deleteFile`, etc.). Isso é intencional para manter zero configuração de build.
 
 **Persistência — modo Electron:** arquivo `gastos.json` na pasta configurada (`appConfig.dataFolderPath` ou userData). Estrutura do JSON:
 ```json
@@ -320,6 +320,15 @@ Cripto no **main process** (Node `crypto`), exposta via IPC (`preload.js` → `w
 
 O modal de senha (`_openBackupPassModal(mode)`/`_confirmBackupPass()`/`_closeBackupPassModal()`) serve tanto export (dois campos: senha + confirmação, mín. 4 chars) quanto import (só senha). **A senha não é recuperável** — se o usuário esquecer, o backup criptografado é irrecuperável (avisado no hint).
 
+### Snapshots automáticos (complementa — não substitui — o backup manual)
+A cada `saveAll()` (Electron), no **máx. 1×/dia**, grava uma cópia em `<pastaDeDados>/gastos-backups/gastos-AAAA-MM-DD-HHhMM.json` — **mesmo formato 2** do backup manual (wrapper com checksum, sem senha, sem credenciais). Funções (topo do `renderer.js`):
+- `_autoSnapshot()` — chamado por `saveAll()` (fire-and-forget). Gate 1×/dia via `appConfig.lastAutoSnapshot` (`'YYYY-MM-DD'`), **setado antes** do trabalho assíncrono para evitar corrida entre saves seguidos. Reusa `_buildBackupFile('')`.
+- `_pruneOldSnapshots(dir)` — apaga snapshots com mais de `SNAPSHOT_RETENTION_DAYS` (30) dias (data lida do nome). Usa os IPC novos `list-dir`/`delete-file` (`window.electronAPI.listDir/deleteFile`).
+- `_snapshotBeforeMigration(motivo)` — cria um snapshot **imediato** (ignora o gate) antes de operações que trocam o local dos dados; chamado em `changeDataFolder()` (nome `gastos-pre-troca-de-pasta-...`). Hook para futura migração de legado (`.legacy-import-checked`).
+- **UI (Config, card "🗂️ Snapshots automáticos"):** `renderAutoBackups()` lista os snapshots (data + nº de lançamentos, lido de cada arquivo) com botão **Restaurar** → `_restoreSnapshot(nome)` → `_handleImportContent()` (reusa o fluxo: **preview** + verificação de checksum + snapshot pré-restauração rotacionado). Chamado em `switchTab('config')`.
+
+O backup manual (com/sem senha) segue idêntico e independente — o automático é uma rede de segurança adicional, local, na pasta de dados.
+
 ---
 
 ## Estrutura das Abas
@@ -391,7 +400,8 @@ card de parcelas/divisão detalhada (renderDivisao())
 ```
 card "💳 Meus cartões" — #cards-list (renderCardsList()), form de cadastro/edição de cartão
 card "💳 Cartão de Crédito" — #cfg-fechamento/#cfg-vencimento (padrão/fallback) + btn 🔄 Recalcular competências
-card "🗄️ Backup" — #backup-info (data do último backup) + exportar/importar (exportBackup() / importBackup())
+card "🗄️ Backup" — #backup-info + exportar (exportBackup/exportBackupEncrypted) / importar (importBackup)
+card "🗂️ Snapshots automáticos" — #auto-backups-list (renderAutoBackups()) + restaurar (_restoreSnapshot)
 card "ℹ️ Sobre" — versão + data da última build (lidas via IPC, ver "Auto-Update") + btn 🔄 Verificar atualizações
 ```
 

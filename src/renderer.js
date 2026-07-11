@@ -48,7 +48,130 @@ const DEFAULT_CONFIG = {
   diaVencimento: 0,    // dia de vencimento da fatura (0 = não configurado)
   dismissedInvoiceAlerts: [], // alertKeys dispensados: ["cardId-YYYY-MM", ...]
   lastBackupDate: 0,          // timestamp Unix do último backup exportado
+  lastAutoSnapshot: '',       // 'YYYY-MM-DD' do último snapshot automático (gate 1x/dia)
 };
+
+// ─── SNAPSHOTS AUTOMÁTICOS ────────────────────────────────────────
+// Complementa o backup manual (Config): a cada saveAll, no máx. 1x/dia, grava
+// uma cópia em <pastaDeDados>/gastos-backups/gastos-AAAA-MM-DD-HHhMM.json
+// (mesmo formato 2 do backup manual — wrapper com checksum SHA-256). Mantém os
+// últimos SNAPSHOT_RETENTION_DAYS dias, apagando os mais antigos.
+const SNAPSHOT_DIR_NAME       = 'gastos-backups';
+const SNAPSHOT_RETENTION_DAYS = 30;
+
+async function _snapshotsDir() {
+  const base = appConfig.dataFolderPath || (await window.electronAPI.getDefaultDataPath());
+  return window.electronAPI.pathJoin(base, SNAPSHOT_DIR_NAME);
+}
+
+function _snapshotStamp(d = new Date()) {
+  const p = n => String(n).padStart(2, '0');
+  return `${d.toISOString().slice(0,10)}-${p(d.getHours())}h${p(d.getMinutes())}`;
+}
+
+// Chamado por saveAll(). Gate por data (1x/dia) via appConfig.lastAutoSnapshot,
+// setado ANTES do trabalho assíncrono para evitar corrida entre saves seguidos.
+async function _autoSnapshot() {
+  if (!isElectron()) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (appConfig.lastAutoSnapshot === today) return;
+  appConfig.lastAutoSnapshot = today;
+  saveConfigToStorage();
+  try {
+    const content = await _buildBackupFile('');   // formato 2 (com checksum), sem senha
+    if (content == null) return;
+    const dir  = await _snapshotsDir();
+    const file = await window.electronAPI.pathJoin(dir, `gastos-${_snapshotStamp()}.json`);
+    await window.electronAPI.writeFile(file, content); // writeFile faz mkdir do dir
+    await _pruneOldSnapshots(dir);
+  } catch { /* não-fatal: o gastos.json principal já foi salvo */ }
+}
+
+// Cria um snapshot AGORA, ignorando o gate 1x/dia — usado antes de operações
+// que trocam o local dos dados (troca de pasta / migração de legado).
+async function _snapshotBeforeMigration(motivo = 'migracao') {
+  if (!isElectron()) return;
+  try {
+    const content = await _buildBackupFile('');
+    if (content == null) return;
+    const dir  = await _snapshotsDir();
+    const safe = String(motivo).replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+    const file = await window.electronAPI.pathJoin(dir, `gastos-pre-${safe}-${_snapshotStamp()}.json`);
+    await window.electronAPI.writeFile(file, content);
+    await _pruneOldSnapshots(dir);
+  } catch { /* não-fatal */ }
+}
+
+// Apaga snapshots com mais de SNAPSHOT_RETENTION_DAYS dias (data no nome).
+async function _pruneOldSnapshots(dir) {
+  const list = await window.electronAPI.listDir(dir);
+  if (!Array.isArray(list)) return;
+  const cutoff = Date.now() - SNAPSHOT_RETENTION_DAYS * 86400000;
+  for (const f of list) {
+    const m = f.name.match(/gastos-(?:pre-[a-z0-9-]+-)?(\d{4})-(\d{2})-(\d{2})-\d{2}h\d{2}\.json$/i);
+    if (!m) continue;
+    const t = new Date(+m[1], +m[2] - 1, +m[3]).getTime();
+    if (t < cutoff) {
+      const p = await window.electronAPI.pathJoin(dir, f.name);
+      await window.electronAPI.deleteFile(p);
+    }
+  }
+}
+
+const _snapStampOf = n => ((n.match(/(\d{4})-(\d{2})-(\d{2})-(\d{2})h(\d{2})/) || []).slice(1).join('')) || '';
+
+// Lista os snapshots automáticos na aba Config (data + nº de lançamentos + restaurar).
+async function renderAutoBackups() {
+  const el = document.getElementById('auto-backups-list');
+  if (!el) return;
+  if (!isElectron()) { el.innerHTML = '<div style="font-size:12px;color:var(--muted)">Disponível apenas no app instalado.</div>'; return; }
+  el.innerHTML = '<div style="font-size:12px;color:var(--muted)">Carregando…</div>';
+  try {
+    const dir  = await _snapshotsDir();
+    const list = await window.electronAPI.listDir(dir);
+    const snaps = (list || [])
+      .filter(f => /^gastos-.*\.json$/i.test(f.name) && _snapStampOf(f.name))
+      .sort((a, b) => _snapStampOf(b.name).localeCompare(_snapStampOf(a.name)));
+    if (!snaps.length) {
+      el.innerHTML = '<div style="font-size:12px;color:var(--muted)">Nenhum snapshot automático ainda. Um é criado no primeiro salvamento de cada dia.</div>';
+      return;
+    }
+    const rows = [];
+    for (const f of snaps) {
+      const p = await window.electronAPI.pathJoin(dir, f.name);
+      let count = '?', pre = /gastos-pre-/i.test(f.name);
+      try {
+        const w = JSON.parse(await window.electronAPI.readFile(p));
+        const payload = w && w.payload ? w.payload : w;
+        count = Array.isArray(payload?.expenses) ? payload.expenses.length : '?';
+      } catch {}
+      const m = f.name.match(/(\d{4})-(\d{2})-(\d{2})-(\d{2})h(\d{2})/);
+      const label = m ? `${m[3]}/${m[2]}/${m[1]} às ${m[4]}h${m[5]}` : f.name;
+      rows.push(`
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 2px;border-bottom:1px solid var(--border)">
+          <div style="font-size:12px;min-width:0">
+            <strong>${escapeHtml(label)}</strong>${pre ? ' <span class="badge" style="background:var(--warn-soft);color:var(--warn)">pré-migração</span>' : ''}
+            <div style="font-size:11px;color:var(--muted)">🧾 ${count} lançamento(s)</div>
+          </div>
+          <button class="btn btn-secondary" style="font-size:11px;padding:4px 10px;flex-shrink:0" data-snap="${escapeHtml(f.name)}" onclick="_restoreSnapshot(this.dataset.snap)" title="Pré-visualiza e restaura este snapshot">⟲ Restaurar</button>
+        </div>`);
+    }
+    el.innerHTML = `<div style="font-size:11px;color:var(--muted);margin-bottom:6px">${snaps.length} snapshot(s) · mantidos por ${SNAPSHOT_RETENTION_DAYS} dias</div>` + rows.join('');
+  } catch { el.innerHTML = '<div style="font-size:12px;color:var(--danger)">Erro ao listar snapshots.</div>'; }
+}
+
+// Restaura um snapshot automático — reusa o fluxo de importação (preview +
+// verificação de checksum + snapshot de segurança pré-restauração).
+async function _restoreSnapshot(name) {
+  if (!isElectron() || !name) return;
+  try {
+    const dir = await _snapshotsDir();
+    const p   = await window.electronAPI.pathJoin(dir, name);
+    const content = await window.electronAPI.readFile(p);
+    if (!content) { notify('Não foi possível ler o snapshot.', 'err'); return; }
+    _handleImportContent(content);
+  } catch { notify('Falha ao abrir o snapshot.', 'err'); }
+}
 
 const SLOT_COLORS_LIGHT = ['#2E5480', '#7A3F5E', '#235C3F', '#5B4FAA'];
 const SLOT_COLORS_DARK  = ['#7EAACB', '#C47EA0', '#5BAA7D', '#9E95E0'];
@@ -161,6 +284,7 @@ async function saveAll() {
     const filePath = await resolveDataFilePath();
     const ok = await window.electronAPI.writeFile(filePath, JSON.stringify(data, null, 2));
     if (!ok) notify('Erro ao salvar arquivo de dados!', 'err');
+    _autoSnapshot(); // snapshot automático 1x/dia (não bloqueia o save)
   } else {
     try {
       localStorage.setItem('gc_expenses',    JSON.stringify(expenses));
@@ -346,6 +470,9 @@ async function changeDataFolder() {
   const folder = await window.electronAPI.selectFolder();
   if (!folder) return;
 
+  // Protege os dados atuais antes de trocar o local (snapshot na pasta atual).
+  await _snapshotBeforeMigration('troca-de-pasta');
+
   const newPath = await window.electronAPI.pathJoin(folder, 'gastos.json');
   const exists  = await window.electronAPI.fileExists(newPath);
 
@@ -517,7 +644,7 @@ function switchTab(name) {
   if (name === 'fixas')       { populateFixedCatSelect(); populateFixedPersonSelect(); renderFixedList(); }
   if (name === 'divisao')     renderDivisao();
   if (name === 'relatorios')  { initReportDates(); renderEvolutionChart(); }
-  if (name === 'config')      renderCfgForm();
+  if (name === 'config')      { renderCfgForm(); renderAutoBackups(); }
 }
 
 function onMonthChange() {
@@ -3107,6 +3234,10 @@ function _merchantLearn(origKey, newDesc, newCatId, newCatNome) {
   saveAll();
 }
 
+// Buffer da fatura selecionada, guardado para reprocessar com senha sem
+// obrigar o usuário a reselecionar o arquivo. Limpo após sucesso/cancelamento.
+let _pendingInvoiceBuffer = null;
+
 function handleInvoiceFile(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -3115,62 +3246,140 @@ function handleInvoiceFile(event) {
     return;
   }
   const reader = new FileReader();
-  reader.onload = e => {
-    try {
-      const wb   = XLSX.read(new Uint8Array(e.target.result), { type:'array', cellDates:true });
-      const ws   = wb.Sheets[wb.SheetNames[0]];
-      // raw:true preserves native types (Dates, numbers); defval:'' fills empty cells
-      const rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:true, defval:'' });
-
-      if (!Array.isArray(rows) || rows.length < 3 || !Array.isArray(rows[1])) {
-        notify('Arquivo sem transações ou formato inválido.','err'); return;
-      }
-
-      // Row 1 contains column headers
-      const header = rows[1].map(h => String(h).trim());
-      const COL = {
-        data:        header.indexOf('Data de compra'),
-        catBanco:    header.indexOf('Categoria'),
-        desc:        header.indexOf('Descrição'),
-        parcela:     header.indexOf('Parcela'),
-        valorBR:     header.indexOf('Valor (em R$)'),
-        finalCartao: header.indexOf('Final do Cartão'),
-      };
-
-      if (COL.desc < 0 || COL.valorBR < 0) {
-        notify('Formato de arquivo inesperado — colunas "Descrição" e "Valor (em R$)" não encontradas. Verifique se é a fatura C6 Bank (.xls/.xlsx).','err');
-        return;
-      }
-
-      const transactions = [];
-      let invalidRows = 0;
-      for (let i = 2; i < rows.length; i++) {
-        const row = rows[i];
-        if (!Array.isArray(row) || !row.some(c => c !== '')) continue;
-        // Valor: valida faixa (0..valorMax); descarta zeros, créditos e absurdos.
-        const valorBR = sanitizeMoney(_parseValorBR(row[COL.valorBR]));
-        if (valorBR === null || valorBR <= 0) { invalidRows++; continue; }
-        const desc    = sanitizeText(row[COL.desc], VALIDATION.descMax) || '(sem descrição)';
-        // Data: usa a do arquivo se válida, senão hoje.
-        const dataBR  = sanitizeDateBR(_formatDateBR(row[COL.data])) || new Date().toLocaleDateString('pt-BR');
-        const catBanco= sanitizeText(row[COL.catBanco], VALIDATION.catMax);
-        const parcela = sanitizeText(row[COL.parcela], 20);
-        const finalCartao = COL.finalCartao >= 0
-          ? String(row[COL.finalCartao] || '').trim().replace(/\D/g, '').slice(-4)
-          : null;
-        const cat         = mapBankCategory(catBanco, desc);
-        transactions.push({ desc, dataBR, catBanco, parcela, valorBR, cat, finalCartao });
-      }
-
-      if (invalidRows > 0) console.warn(`[fatura] ${invalidRows} linha(s) ignorada(s) por valor inválido/fora da faixa.`);
-      if (!transactions.length) { notify('Nenhuma transação válida encontrada no arquivo.','err'); return; }
-      _renderInvoicePreview(transactions);
-    } catch(err) {
-      console.error('[fatura] Falha ao processar o arquivo:', err.message);
-      notify('Não foi possível ler o arquivo. Verifique se é uma fatura C6 Bank válida (.xls/.xlsx).', 'err');
-    }
-  };
+  reader.onload  = e => { _pendingInvoiceBuffer = e.target.result; _readInvoiceBuffer(e.target.result, ''); };
+  reader.onerror = () => notify('Não foi possível ler o arquivo selecionado.', 'err');
   reader.readAsArrayBuffer(file);
+}
+
+// Lê o workbook do buffer (senha opcional) e processa as transações. A leitura
+// do XLSX fica isolada para distinguir erro de senha/formato dos demais.
+function _readInvoiceBuffer(buffer, password) {
+  let wb;
+  try {
+    const opts = { type: 'array', cellDates: true };
+    if (password) opts.password = password;
+    wb = XLSX.read(new Uint8Array(buffer), opts);
+  } catch (err) {
+    _handleInvoiceReadError(err, !!password);
+    return;
+  }
+
+  try {
+    const ws   = wb.Sheets[wb.SheetNames[0]];
+    // raw:true preserves native types (Dates, numbers); defval:'' fills empty cells
+    const rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:true, defval:'' });
+
+    if (!Array.isArray(rows) || rows.length < 3 || !Array.isArray(rows[1])) {
+      notify('Arquivo sem transações ou formato inválido.','err'); return;
+    }
+
+    // Row 1 contains column headers
+    const header = rows[1].map(h => String(h).trim());
+    const COL = {
+      data:        header.indexOf('Data de compra'),
+      catBanco:    header.indexOf('Categoria'),
+      desc:        header.indexOf('Descrição'),
+      parcela:     header.indexOf('Parcela'),
+      valorBR:     header.indexOf('Valor (em R$)'),
+      finalCartao: header.indexOf('Final do Cartão'),
+    };
+
+    if (COL.desc < 0 || COL.valorBR < 0) {
+      notify('Formato de arquivo inesperado — colunas "Descrição" e "Valor (em R$)" não encontradas. Verifique se é a fatura C6 Bank (.xls/.xlsx).','err');
+      return;
+    }
+
+    const transactions = [];
+    let invalidRows = 0;
+    for (let i = 2; i < rows.length; i++) {
+      const row = rows[i];
+      if (!Array.isArray(row) || !row.some(c => c !== '')) continue;
+      // Valor: valida faixa (0..valorMax); descarta zeros, créditos e absurdos.
+      const valorBR = sanitizeMoney(_parseValorBR(row[COL.valorBR]));
+      if (valorBR === null || valorBR <= 0) { invalidRows++; continue; }
+      const desc    = sanitizeText(row[COL.desc], VALIDATION.descMax) || '(sem descrição)';
+      // Data: usa a do arquivo se válida, senão hoje.
+      const dataBR  = sanitizeDateBR(_formatDateBR(row[COL.data])) || new Date().toLocaleDateString('pt-BR');
+      const catBanco= sanitizeText(row[COL.catBanco], VALIDATION.catMax);
+      const parcela = sanitizeText(row[COL.parcela], 20);
+      const finalCartao = COL.finalCartao >= 0
+        ? String(row[COL.finalCartao] || '').trim().replace(/\D/g, '').slice(-4)
+        : null;
+      const cat         = mapBankCategory(catBanco, desc);
+      transactions.push({ desc, dataBR, catBanco, parcela, valorBR, cat, finalCartao });
+    }
+
+    if (invalidRows > 0) console.warn(`[fatura] ${invalidRows} linha(s) ignorada(s) por valor inválido/fora da faixa.`);
+    if (!transactions.length) { notify('Nenhuma transação válida encontrada no arquivo.','err'); return; }
+
+    // Sucesso: fecha o modal de senha (se aberto) e libera o buffer.
+    _pendingInvoiceBuffer = null;
+    _closeInvoicePassModal();
+    _renderInvoicePreview(transactions);
+  } catch(err) {
+    console.error('[fatura] Falha ao processar o arquivo:', err && err.message);
+    notify('Não foi possível interpretar a fatura. Verifique se é uma fatura C6 Bank válida (.xls/.xlsx).', 'err');
+  }
+}
+
+// Trata erros de XLSX.read com mensagens específicas por tipo de falha.
+// triedPassword = true quando a leitura já foi tentada com uma senha informada.
+function _handleInvoiceReadError(err, triedPassword) {
+  const raw = (err && err.message) ? err.message : String(err || '');
+  const msg = raw.toLowerCase();
+  const isPassword = msg.includes('password') || msg.includes('encrypt');
+
+  if (isPassword) {
+    // SheetJS lança "File is password-protected" (sem senha) ou erro de senha
+    // incorreta na descriptografia (com senha).
+    _openInvoicePassModal(triedPassword
+      ? 'Senha incorreta. Verifique a senha da fatura e tente novamente.'
+      : 'Esta fatura está protegida por senha. Exporte a fatura sem senha no site/app do C6, ou tente novamente informando a senha.');
+    return;
+  }
+
+  console.error('[fatura] Falha ao ler o arquivo:', raw);
+  // Mensagem informativa por tipo de falha de leitura.
+  let detail;
+  if (msg.includes('unsupported') || msg.includes('unrecognized') || msg.includes('cannot find') || msg.includes('format'))
+    detail = 'Formato de arquivo não suportado. Exporte a fatura como .xls ou .xlsx no site/app do C6.';
+  else if (msg.includes('corrupt') || msg.includes('bad') || msg.includes('zip') || msg.includes('cfb') || msg.includes('end of'))
+    detail = 'Arquivo corrompido ou incompleto. Baixe a fatura novamente no site/app do C6 e tente de novo.';
+  else
+    detail = 'Não foi possível ler o arquivo. Verifique se é uma fatura C6 Bank válida (.xls/.xlsx).';
+  notify(detail, 'err');
+}
+
+// ─── MODAL DE SENHA DA FATURA ────────────────────────────────────
+function _openInvoicePassModal(hintMsg) {
+  const hint = document.getElementById('invoice-pass-hint');
+  const msg  = document.getElementById('invoice-pass-msg');
+  if (hint) hint.textContent = hintMsg || '';
+  if (msg)  msg.textContent  = '';
+  const modal = document.getElementById('invoice-pass-modal');
+  if (modal) modal.classList.add('open');
+  setTimeout(() => document.getElementById('invoice-pass-input')?.focus(), 50);
+}
+
+function _closeInvoicePassModal() {
+  document.getElementById('invoice-pass-modal')?.classList.remove('open');
+  const input = document.getElementById('invoice-pass-input');
+  if (input) input.value = '';
+}
+
+function _retryInvoiceWithPassword() {
+  const password = document.getElementById('invoice-pass-input')?.value || '';
+  if (!password) {
+    const msg = document.getElementById('invoice-pass-msg');
+    if (msg) msg.textContent = 'Informe a senha da fatura para continuar.';
+    return;
+  }
+  if (!_pendingInvoiceBuffer) {
+    notify('Selecione a fatura novamente para informar a senha.', 'warn');
+    _closeInvoicePassModal();
+    return;
+  }
+  _readInvoiceBuffer(_pendingInvoiceBuffer, password);
 }
 
 function _renderInvoicePreview(transactions) {

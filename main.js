@@ -131,6 +131,26 @@ ipcMain.handle('open-file-dialog', async (_event, options) => {
   return result.canceled ? null : result.filePaths[0];
 });
 
+// Lista arquivos de um diretório (para os snapshots automáticos). Retorna
+// [{ name, mtime, size }]; diretório inexistente → []. Nunca lança.
+ipcMain.handle('list-dir', (_event, dirPath) => {
+  try {
+    if (!fs.existsSync(dirPath)) return [];
+    return fs.readdirSync(dirPath, { withFileTypes: true })
+      .filter(d => d.isFile())
+      .map(d => {
+        let mtime = 0, size = 0;
+        try { const st = fs.statSync(path.join(dirPath, d.name)); mtime = st.mtimeMs; size = st.size; } catch {}
+        return { name: d.name, mtime, size };
+      });
+  } catch { return []; }
+});
+
+// Apaga um arquivo (usado no prune de snapshots antigos). Retorna bool.
+ipcMain.handle('delete-file', (_event, filePath) => {
+  try { fs.unlinkSync(filePath); return true; } catch { return false; }
+});
+
 // ─── SECRETS (safeStorage) ───────────────────────────────────────
 // Criptografa/descriptografa segredos (token do bot, secret do Sheets) com a
 // chave do SO (DPAPI no Windows). Retorna { available, value }:
@@ -302,6 +322,92 @@ function openDataFolder() {
     }).catch(() => {});
 }
 
+// ─── MIGRAÇÃO: importar dados de instalação anterior (gastos-casal) ─
+// No primeiro boot, se a pasta userData atual (Finannza) não tiver dados reais
+// mas existir uma pasta irmã de uma versão antiga (ex: gastos-casal) com um
+// gastos.json contendo lançamentos, oferece importar via diálogo nativo Sim/Não
+// e copia o arquivo. Roda uma única vez (marcador), mesmo que o usuário recuse.
+
+// Nomes de pasta usados por versões anteriores do app (antes do rebrand p/ Finannza).
+const LEGACY_FOLDER_NAMES = ['gastos-casal', 'Gastos do Casal', 'gastos-casal-app'];
+
+// Conta lançamentos reais num gastos.json. 0 = ausente, ilegível, vazio ou
+// só com dados de teste (heurística: todos os expenses marcados _test/_seed).
+function countRealExpenses(jsonPath) {
+  try {
+    const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    if (!data || !Array.isArray(data.expenses)) return 0;
+    const real = data.expenses.filter(e => e && !e._test && !e._seed && !e.isTest);
+    return real.length;
+  } catch { return 0; }
+}
+
+function _touchMarker(p) {
+  try { fs.writeFileSync(p, new Date().toISOString(), 'utf8'); } catch { /* best-effort */ }
+}
+
+function maybeImportOrphanData() {
+  try {
+    const userData    = app.getPath('userData');
+    const currentJson = path.join(userData, 'gastos.json');
+    // Marcador: só oferece a importação uma vez, mesmo que o usuário recuse.
+    const marker = path.join(userData, '.legacy-import-checked');
+    if (fs.existsSync(marker)) return;
+
+    // Se a pasta atual já tem dados reais, não há órfão a importar.
+    if (countRealExpenses(currentJson) > 0) { _touchMarker(marker); return; }
+
+    // Procura pasta irmã de versão antiga com gastos.json contendo lançamentos.
+    const parent = path.dirname(userData);
+    let legacyDir = null, legacyCount = 0;
+    for (const name of LEGACY_FOLDER_NAMES) {
+      const dir  = path.join(parent, name);
+      if (path.resolve(dir) === path.resolve(userData)) continue; // nunca a própria pasta
+      const json = path.join(dir, 'gastos.json');
+      const n = countRealExpenses(json);
+      if (n > 0) { legacyDir = dir; legacyCount = n; break; }
+    }
+    if (!legacyDir) { _touchMarker(marker); return; }
+
+    const legacyName = path.basename(legacyDir);
+    const plural = legacyCount === 1 ? '' : 's';
+    const choice = dialog.showMessageBoxSync({
+      type: 'question',
+      buttons: ['Sim, importar', 'Não'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+      title: 'Importar dados anteriores',
+      message: `Encontramos dados de uma instalação anterior (${legacyName}) com ${legacyCount} lançamento${plural}. Deseja importá-los agora?`,
+      detail: 'Os dados serão copiados para a pasta atual do Finannza. Como seus dados atuais estão vazios, nada será perdido.',
+    });
+
+    if (choice === 0) {
+      try {
+        fs.mkdirSync(userData, { recursive: true });
+        fs.copyFileSync(path.join(legacyDir, 'gastos.json'), currentJson);
+        dialog.showMessageBoxSync({
+          type: 'info',
+          title: 'Importação concluída',
+          message: `${legacyCount} lançamento${plural} importado${plural} com sucesso da instalação anterior.`,
+        });
+      } catch (copyErr) {
+        console.error('[migração] Falha ao copiar gastos.json anterior:', copyErr.message);
+        dialog.showMessageBoxSync({
+          type: 'error',
+          title: 'Falha na importação',
+          message: 'Não foi possível copiar os dados da instalação anterior.',
+          detail: copyErr.message,
+        });
+        return; // não grava marcador — permite tentar de novo no próximo boot
+      }
+    }
+    _touchMarker(marker);
+  } catch (e) {
+    console.error('[migração] Falha ao verificar dados de instalação anterior:', e.message);
+  }
+}
+
 // ─── CONTENT SECURITY POLICY ──────────────────────────────────────
 // Aplicada a todas as respostas via cabeçalho HTTP. 'unsafe-inline' em
 // script/style é temporário (Etapa 2B): o HTML ainda tem <script> inline e
@@ -335,6 +441,7 @@ function applyCsp() {
 // ─── APP LIFECYCLE ────────────────────────────────────────────────
 app.whenReady().then(() => {
   applyCsp();
+  maybeImportOrphanData(); // antes de criar a janela: renderer já lê o gastos.json importado
   createWindow();
   createTray();
   checkForUpdates();

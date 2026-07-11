@@ -772,6 +772,18 @@
       </div>
     </div>
 
+    <!-- Snapshots automáticos -->
+    <div class="card">
+      <div class="card-title">🗂️ Snapshots automáticos</div>
+      <div style="font-size:11.5px;color:var(--muted);margin-bottom:10px;line-height:1.55">
+        Cópias de segurança criadas automaticamente (1× por dia) na pasta <code>gastos-backups</code>, ao lado do seu <code>gastos.json</code>. As últimas 30 diárias são mantidas; as mais antigas são apagadas. Complementa — não substitui — o backup manual acima. Cada snapshot inclui um checksum de integridade, verificado ao restaurar.
+      </div>
+      <div id="auto-backups-list" style="max-height:260px;overflow-y:auto">Carregando…</div>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn btn-secondary" style="font-size:11px" onclick="renderAutoBackups()">🔄 Atualizar lista</button>
+      </div>
+    </div>
+
     <!-- Save all -->
     <div class="btn-row" style="margin-top:0">
       <button class="btn btn-primary" style="font-size:13px;padding:9px 20px" onclick="saveConfigSettings()">💾 Salvar configurações</button>
@@ -951,6 +963,24 @@
         <button class="btn btn-secondary" onclick="closeInvoiceModal()">Cancelar</button>
         <button class="btn btn-primary" onclick="confirmInvoiceImport()">✚ Importar selecionados</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ INVOICE PASSWORD MODAL ══ -->
+<div class="modal-overlay" id="invoice-pass-modal" onclick="if(event.target===this)_closeInvoicePassModal()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-title">🔒 Fatura protegida por senha <button class="modal-close" onclick="_closeInvoicePassModal()">✕</button></div>
+    <div id="invoice-pass-hint" style="font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:12px"></div>
+    <div style="margin-bottom:8px">
+      <label style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase">Senha da fatura</label>
+      <input type="password" id="invoice-pass-input" placeholder="Senha (opcional)" autocomplete="off"
+             onkeydown="if(event.key==='Enter')_retryInvoiceWithPassword()" />
+    </div>
+    <div id="invoice-pass-msg" style="font-size:11.5px;color:var(--danger);min-height:15px;margin-bottom:6px"></div>
+    <div class="btn-row" style="margin-top:6px">
+      <button class="btn btn-secondary" onclick="_closeInvoicePassModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="_retryInvoiceWithPassword()">Tentar novamente</button>
     </div>
   </div>
 </div>

@@ -16,4 +16,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   decryptSecret:      (b64)              => ipcRenderer.invoke('decrypt-secret', b64),
   backupSeal:         (plaintext, pass)  => ipcRenderer.invoke('backup-seal', plaintext, pass),
   backupOpen:         (bundle, pass)     => ipcRenderer.invoke('backup-open', bundle, pass),
+  listDir:            (dirPath)          => ipcRenderer.invoke('list-dir', dirPath),
+  deleteFile:         (filePath)         => ipcRenderer.invoke('delete-file', filePath),
 });
