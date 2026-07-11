@@ -36,7 +36,7 @@ src/
   index.html         # Todo o CSS + estrutura HTML (~1000 linhas)
   renderer.js        # Toda a lógica de negócio + renderização (~3660 linhas)
   classifier.js      # Motor de classificação local (sem API, keyword-based)
-  vendor/            # Libs auto-hospedadas (não-CDN): chart.umd.js, xlsx.full.min.js, fonts/manrope-*.woff2
+  vendor/            # Libs auto-hospedadas (não-CDN): chart.umd.js, xlsx.full.min.js, fonts/inter-*.woff2, fonts/ibm-plex-mono-*.woff2
 .claude/
   settings.json      # Permissões auto-aprovadas do Claude Code
 package.json         # Electron 29 + electron-builder
@@ -424,7 +424,7 @@ card "Aprendizado de classificação" — #merchant-form-key/nome/cat, lista de 
 
 ## Design System (CSS Variables)
 
-Fonte: `'Segoe UI', system-ui, -apple-system, sans-serif` · 13px base
+**Tipografia:** corpo em **Inter** (`'Inter','Segoe UI',system-ui,...`), **14px** base, `font-weight:500`, `font-variant-numeric:tabular-nums` (dígitos alinham em colunas). Números de destaque (cards `.metric-value`) em **IBM Plex Mono** (visual de extrato bancário). Ambas auto-hospedadas em `vendor/fonts/` (Inter 400/500/600/700, IBM Plex Mono 500/600 — subset latin). Hierarquia de peso: corpo 500, `.expense-desc`/labels 600, valores/`.expense-amount`/títulos 600–700. **Nunca usar peso < 400** (piso; body é 500). 13px/11px só para labels/legendas secundárias.
 
 | Variável | Light | Dark | Uso |
 |---|---|---|---|
@@ -548,7 +548,7 @@ base-uri 'none'
 - **Cuidado ao testar CSP batendo na raiz de um host** (`https://api.telegram.org/`, `https://script.google.com/`): essas raízes respondem 302 redirecionando para **outra** origem não-allowlistada (telegram.org, google.com), e o Chromium reporta a violação do redirect contra a **URL original**, dando falso-positivo de "host allowlistado bloqueado". As chamadas reais do app (path completo, ex. `/bot<token>/getUpdates` ou `.../exec`) não têm esse redirect cross-origin e passam normalmente — confirmado com `fetch('https://api.telegram.org/bot000000:invalid/getMe')` retornando HTTP 401 (resposta do próprio Telegram) sem violação de CSP.
 
 ### Dependências de terceiros — auto-hospedadas (`src/vendor/`)
-Chart.js 4.4.1 (`vendor/chart.umd.js`), SheetJS/xlsx 0.18.5 (`vendor/xlsx.full.min.js`) e a fonte Manrope (`vendor/fonts/manrope-latin-{400,500,600,700,800}-normal.woff2`, subset latin — cobre acentuação pt-BR) são servidos **localmente**, não mais por CDN (cdnjs/Google Fonts). Isso: (a) permite a CSP com `default-src 'self'`/`script-src 'self'`; (b) elimina risco de supply-chain do CDN; (c) faz o app funcionar **offline**, alinhado à filosofia "100% local". `package.json → build.files` já inclui `src/**/*`, então o `vendor/` entra no instalador automaticamente. Ao atualizar uma dessas libs, **rebaixe o arquivo para `vendor/` e ajuste a tag `<script>`** — nunca volte a apontar para CDN.
+Chart.js 4.4.1 (`vendor/chart.umd.js`), SheetJS/xlsx 0.18.5 (`vendor/xlsx.full.min.js`) e as fontes **Inter** (`vendor/fonts/inter-latin-{400,500,600,700}-normal.woff2`) e **IBM Plex Mono** (`vendor/fonts/ibm-plex-mono-latin-{500,600}-normal.woff2`), subset latin — cobre acentuação pt-BR, são servidos **localmente**, não mais por CDN (cdnjs/Google Fonts). (A fonte anterior, Manrope, foi substituída por Inter por legibilidade — ver Design System.) Isso: (a) permite a CSP com `default-src 'self'`/`script-src 'self'`; (b) elimina risco de supply-chain do CDN; (c) faz o app funcionar **offline**, alinhado à filosofia "100% local". `package.json → build.files` já inclui `src/**/*`, então o `vendor/` entra no instalador automaticamente. Ao atualizar uma dessas libs, **rebaixe o arquivo para `vendor/` e ajuste a tag `<script>`** — nunca volte a apontar para CDN.
 
 ### Prioridade 1 — Sanitização de HTML (XSS)
 `escapeHtml()` (escapa `& < > " '`) é aplicado em **100%** dos pontos de `innerHTML` que recebem dado externo — auditado campo a campo: `descricao`/`categoria`/`pessoa`/`data`/`metodo` em `expenseItemHTML()`, relatórios, divisão, parcelas, faturas; `desc`/`origDesc`/`catBanco`/`parcela` no preview de fatura (`_renderInvoicePreview`); nomes de merchant e de cartão. `icone`/`cor` vêm de definições internas de categoria (não de texto externo). **Não há lacuna de XSS** — dados do Telegram/Sheets/fatura são armazenados crus mas escapados na renderização (um `<img onerror>` numa descrição aparece como texto literal, não executa). Ao adicionar novo template literal com dado do usuário, sempre passe por `escapeHtml()`.

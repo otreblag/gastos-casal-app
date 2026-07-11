@@ -4,12 +4,15 @@
   <meta charset="UTF-8" />
   <title>Finannza</title>
   <style>
-    /* Fonte Manrope auto-hospedada (vendor/fonts) — sem dependência do Google Fonts, funciona offline */
-    @font-face{font-family:'Manrope';font-style:normal;font-weight:400;font-display:swap;src:url('vendor/fonts/manrope-latin-400-normal.woff2') format('woff2')}
-    @font-face{font-family:'Manrope';font-style:normal;font-weight:500;font-display:swap;src:url('vendor/fonts/manrope-latin-500-normal.woff2') format('woff2')}
-    @font-face{font-family:'Manrope';font-style:normal;font-weight:600;font-display:swap;src:url('vendor/fonts/manrope-latin-600-normal.woff2') format('woff2')}
-    @font-face{font-family:'Manrope';font-style:normal;font-weight:700;font-display:swap;src:url('vendor/fonts/manrope-latin-700-normal.woff2') format('woff2')}
-    @font-face{font-family:'Manrope';font-style:normal;font-weight:800;font-display:swap;src:url('vendor/fonts/manrope-latin-800-normal.woff2') format('woff2')}
+    /* Fontes auto-hospedadas (vendor/fonts) — sem CDN, funciona offline.
+       Inter: corpo/labels/valores (ótima legibilidade em tela + números tabulares).
+       IBM Plex Mono: números de destaque (cards de métrica) — visual de extrato bancário. */
+    @font-face{font-family:'Inter';font-style:normal;font-weight:400;font-display:swap;src:url('vendor/fonts/inter-latin-400-normal.woff2') format('woff2')}
+    @font-face{font-family:'Inter';font-style:normal;font-weight:500;font-display:swap;src:url('vendor/fonts/inter-latin-500-normal.woff2') format('woff2')}
+    @font-face{font-family:'Inter';font-style:normal;font-weight:600;font-display:swap;src:url('vendor/fonts/inter-latin-600-normal.woff2') format('woff2')}
+    @font-face{font-family:'Inter';font-style:normal;font-weight:700;font-display:swap;src:url('vendor/fonts/inter-latin-700-normal.woff2') format('woff2')}
+    @font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:500;font-display:swap;src:url('vendor/fonts/ibm-plex-mono-latin-500-normal.woff2') format('woff2')}
+    @font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:600;font-display:swap;src:url('vendor/fonts/ibm-plex-mono-latin-600-normal.woff2') format('woff2')}
 
     *{box-sizing:border-box;margin:0;padding:0}
 
@@ -40,14 +43,14 @@
       --shadow-md:0 4px 14px rgba(0,0,0,.42),0 2px 4px rgba(0,0,0,.24);
       --theme-icon:'☀️';
     }
-    body{font-family:'Manrope','Segoe UI',system-ui,-apple-system,sans-serif;background-color:var(--bg);background-image:radial-gradient(ellipse at 15% 60%,rgba(30,107,158,.055) 0%,transparent 55%),radial-gradient(ellipse at 85% 10%,rgba(30,107,158,.04) 0%,transparent 50%);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden;font-size:13px;-webkit-font-smoothing:antialiased;letter-spacing:.005em}
+    body{font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;font-weight:500;background-color:var(--bg);background-image:radial-gradient(ellipse at 15% 60%,rgba(30,107,158,.055) 0%,transparent 55%),radial-gradient(ellipse at 85% 10%,rgba(30,107,158,.04) 0%,transparent 50%);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden;font-size:14px;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;letter-spacing:0}
     [data-theme="dark"] body{background-image:radial-gradient(ellipse at 15% 60%,rgba(91,163,204,.07) 0%,transparent 55%),radial-gradient(ellipse at 85% 10%,rgba(91,163,204,.05) 0%,transparent 50%)}
 
     /* ─── HEADER ─────────────────────────────────────────────────────── */
     .header{background:var(--surface);border-bottom:2px solid #B8913A;padding:22px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
     [data-theme="dark"] .header{background:#111114}
     .header-brand{display:flex;align-items:center}
-    .header-title{font-size:28px;font-weight:600;letter-spacing:.14em;color:var(--text);line-height:1}
+    .header-title{font-size:28px;font-weight:700;letter-spacing:.12em;color:var(--text);line-height:1}
     .header-title .brand-gold{color:#C9A24B}
     .header-right{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
     .app-version-badge{position:fixed;bottom:6px;left:10px;font-size:10px;color:var(--muted);opacity:.5;letter-spacing:.02em;pointer-events:none;z-index:5;user-select:none}
@@ -84,7 +87,8 @@
     .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
     .metric{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow-sm)}
     .metric-label{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:7px;font-weight:700}
-    .metric-value{font-size:20px;font-weight:600;letter-spacing:-.03em;color:var(--text);line-height:1;font-feature-settings:"tnum" 1}
+    /* Números de destaque com cara de extrato bancário: IBM Plex Mono, semibold, tabular */
+    .metric-value{font-family:'IBM Plex Mono','Inter',monospace;font-size:20px;font-weight:600;letter-spacing:-.01em;color:var(--text);line-height:1;font-variant-numeric:tabular-nums}
     .metric-value.red{color:var(--danger)}
     .metric-sub{font-size:10px;color:var(--muted);margin-top:4px;letter-spacing:.01em}
 
@@ -127,9 +131,9 @@
     .expense-item:hover{box-shadow:var(--shadow-md);border-color:var(--accent);transform:translateX(2px)}
     .expense-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;font-family:'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif}
     .expense-main{flex:1;min-width:0}
-    .expense-desc{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.005em}
-    .expense-meta{font-size:10px;color:var(--muted);margin-top:2px;display:flex;gap:7px;flex-wrap:wrap;align-items:center;letter-spacing:.01em}
-    .expense-amount{font-size:13px;font-weight:600;color:var(--danger);flex-shrink:0;letter-spacing:-.015em}
+    .expense-desc{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.003em}
+    .expense-meta{font-size:11px;color:var(--muted);margin-top:2px;display:flex;gap:7px;flex-wrap:wrap;align-items:center;letter-spacing:.01em;font-weight:500}
+    .expense-amount{font-size:14px;font-weight:700;color:var(--danger);flex-shrink:0;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
     .expense-actions{display:flex;gap:2px;flex-shrink:0}
     .badge{font-size:9px;padding:2px 7px;border-radius:4px;background:var(--faint);color:var(--muted);font-weight:700;letter-spacing:.05em;text-transform:uppercase;border:1px solid var(--border)}
     .badge-person{font-size:9px;padding:2px 8px;border-radius:4px;font-weight:700;letter-spacing:.04em}
@@ -349,7 +353,7 @@
     <div id="faturas-abertas"></div>
     <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:12px">
       <div class="card">
-        <div class="card-title">Por categoria <span id="chart-total" style="font-weight:400;text-transform:none;letter-spacing:0"></span></div>
+        <div class="card-title">Por categoria <span id="chart-total" style="font-weight:500;text-transform:none;letter-spacing:0"></span></div>
         <div class="legend" id="chart-legend"></div>
         <div class="chart-wrap"><canvas id="chart-cat" aria-label="Gastos por categoria"></canvas></div>
       </div>
@@ -359,7 +363,7 @@
       </div>
     </div>
     <div class="card">
-      <div class="card-title">Últimos lançamentos <a href="#" style="font-size:11px;color:var(--blue);font-weight:400;text-transform:none;letter-spacing:0" onclick="switchTab('lancamentos')">ver todos →</a></div>
+      <div class="card-title">Últimos lançamentos <a href="#" style="font-size:11px;color:var(--blue);font-weight:500;text-transform:none;letter-spacing:0" onclick="switchTab('lancamentos')">ver todos →</a></div>
       <div id="recent-list"><div class="empty"><div class="empty-icon">🧾</div>Nenhum gasto ainda.</div></div>
     </div>
   </div>
@@ -429,7 +433,7 @@
   <!-- ══ ORÇAMENTO ══ -->
   <div class="panel" id="panel-orcamento">
     <div class="card" id="month-goal-card">
-      <div class="card-title">🎯 Meta do mês <span id="goal-month-label" style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)"></span></div>
+      <div class="card-title">🎯 Meta do mês <span id="goal-month-label" style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--muted)"></span></div>
       <div id="month-goal-content"></div>
     </div>
     <div class="card">
@@ -442,7 +446,7 @@
       <div class="btn-row" style="margin-top:0"><button class="btn btn-primary" onclick="addBudget()">✚ Adicionar orçamento</button></div>
     </div>
     <div class="card">
-      <div class="card-title">Orçamentos do mês <span id="bud-month-label" style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)"></span></div>
+      <div class="card-title">Orçamentos do mês <span id="bud-month-label" style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--muted)"></span></div>
       <div id="budget-list"><div class="empty"><div class="empty-icon">🎯</div>Nenhum orçamento definido.</div></div>
     </div>
     <div class="card">
