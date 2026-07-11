@@ -5,6 +5,7 @@ dist/
 # Dados pessoais/financeiros — nunca devem ir para o repositório
 gastos.json
 gastos-pre-restore.json
+gastos-recuperado*.json
 *.backup.json
 finannza-backup-*.json
 *backup*.json
