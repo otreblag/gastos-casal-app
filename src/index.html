@@ -407,9 +407,9 @@
           </div>
           <div>
             <div style="font-size:10px;font-weight:600;color:var(--muted);margin-bottom:4px;text-transform:uppercase">Data (de / até)</div>
-            <div style="display:flex;gap:4px">
-              <input type="date" id="filter-date-from" style="flex:1;font-size:11px" onchange="_setListFilter('dateFrom', this.value || '')" />
-              <input type="date" id="filter-date-to" style="flex:1;font-size:11px" onchange="_setListFilter('dateTo', this.value || '')" />
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <input type="date" id="filter-date-from" title="De" style="width:100%;font-size:11px;padding:6px 8px" onchange="_setListFilter('dateFrom', this.value || '')" />
+              <input type="date" id="filter-date-to" title="Até" style="width:100%;font-size:11px;padding:6px 8px" onchange="_setListFilter('dateTo', this.value || '')" />
             </div>
           </div>
           <div>
