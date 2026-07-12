@@ -241,6 +241,15 @@ Sempre use `classifyInput(text)` no renderer (não `classify(text)` diretamente)
 
 Badge `🔁 fixa` é exibido em `expenseItemHTML()` quando `e.fixedId` está presente.
 
+### Contas variáveis (`fixedExpenses[].tipo === 'variavel'`)
+Contas sem valor fixo (água, luz, condomínio, gás, internet) são um subtipo de despesa fixa que o app **estima automaticamente**:
+- **Estimativa** — `_calcVariavelEstimate(fixedId)` = média dos **últimos 6** lançamentos *confirmados* daquele template (`e.fixedId === f.id && e.isEstimate !== true && e.valor > 0`).
+- **Geração** — `_autoGenerateFixed()`/`generateFixedForMonth()` cria a entry com `isEstimate: true` + `valorEstimado` (o valor gerado é a estimativa). Sem histórico e sem valor inicial → pula.
+- **Confirmação** — quando o usuário edita o valor da conta gerada, `isEstimate` vira `false` (vira "valor real") e passa a alimentar o histórico das estimativas futuras.
+- **Badges** (`expenseItemHTML()`): `📊 Estimativa méd. R$X` (`isEstimate===true`), `✅ Valor real` (`isEstimate===false`); e `📊 variável` no template em `renderFixedList()`.
+- **Painel na aba Fixas** (`renderFixedList()`): sparkline dos últimos 6 valores (`sparklineSVG()`), `méd. · mín · máx`, tendência `↑`/`↓`/`→` (`_calcTrend()`, cor vermelho/verde/neutro) e "Estimativa próximo mês".
+- **Lembrete no Dashboard** — banner "N conta(s) variáve(is) aguardam confirmação do valor real este mês" quando há estimativas geradas não confirmadas no mês.
+
 ---
 
 ## Cartões e Competência de Fatura (`cards`)
@@ -295,6 +304,7 @@ Estado em `_listFilters` (pessoa, dateFrom, dateTo, valorMin, valorMax, metodo, 
 - `_setListSort(field)` alterna direção se clicar no mesmo campo já ativo
 - `clearAllListFilters()` reseta filtros, ordenação **não muda**; `clearFilters()` é apenas um alias legado
 - `_renderFilterSummary()` mostra a barra "N de M itens" com resumo dos filtros ativos
+- **Layout responsivo:** `#advanced-filters` usa `grid-template-columns:repeat(auto-fit,minmax(190px,1fr))` — as colunas preenchem toda a largura e refluem sozinhas ao redimensionar (6 colunas em tela larga → 3 → 2 → 1). **Use `auto-fit`, não `auto-fill`** (este último deixa colunas-fantasma vazias à direita). Os dois campos `type="date"` (De/Até) ficam **empilhados** (`flex-direction:column`) para caber a data completa `DD/MM/YYYY` + o ícone do calendário.
 
 ---
 
