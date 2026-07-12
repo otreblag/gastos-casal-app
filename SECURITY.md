@@ -222,15 +222,15 @@ com teste do fluxo do bot. Risco atual mitigado: o bot só fala com
 - [x] `.gitignore` cobre `.env`, backups e config local; `.env.example` no bot
 - [x] Sem segredos hardcoded no código ou no histórico do git (auditado)
 - [x] `npm audit fix` (não-breaking) aplicado no app
+- [x] Allowlist de caminhos nos IPC de arquivo (`read-file`/`write-file`/`delete-file`/`list-dir`/`file-exists` só operam sob userData + pasta registrada + caminhos escolhidos em diálogo nativo)
+- [x] Guardas de navegação (`setWindowOpenHandler` nega novas janelas; `will-navigate` bloqueia sair da URL local)
 
 ### 🔭 Melhoria futura (fora do escopo atual)
-- [ ] Upgrade do Electron (29 → 43+) para zerar as advisories de `electron`
-- [ ] Upgrade do `electron-builder` (resolve `tar`, build-time)
-- [ ] Upgrade do `node-telegram-bot-api` no bot (resolve a árvore do `request`)
-- [ ] Assinatura de código (Authenticode) do instalador `.exe`
+- [ ] Upgrade do Electron (29 → 43+) para zerar as advisories de `electron` — *breaking, exige regressão completa*
+- [ ] Upgrade do `electron-builder` (resolve `tar`, build-time) — *breaking*
+- [ ] Upgrade do `node-telegram-bot-api` no bot (resolve a árvore do `request`) — *breaking major*
+- [ ] Assinatura de código (Authenticode) do instalador `.exe` — *precisa de certificado (custo)*
 - [ ] Etapa 2A da CSP: remover `'unsafe-inline'` refatorando `onclick`/`style`
-      inline para `addEventListener`/classes
+      inline para `addEventListener`/classes — *trabalho grande, alto risco de regressão*
 - [ ] Política de força mínima para a senha de backup
-- [ ] Restringir os handlers IPC `read-file`/`write-file` a uma allowlist de
-      caminhos (hoje aceitam caminho arbitrário vindo do renderer)
 - [ ] Rotação/expiração automática de credenciais

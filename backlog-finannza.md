@@ -16,27 +16,23 @@ Nenhum é urgente; ficam registrados para não se perderem. Verificados como
 | Item | Descrição | Prioridade |
 |---|---|---|
 | **CSP estrita (Etapa 2A)** | Remover `'unsafe-inline'` de `script-src`/`style-src` refatorando ~60 `onclick=`/`style=` inline para `addEventListener`/classes | Baixa — trabalho grande, risco de regressão |
-| **Allowlist de caminhos nos IPC** | `read-file`/`write-file` (main.js) aceitam caminho arbitrário do renderer — um XSS teórico leria/escreveria qualquer arquivo. Restringir à pasta de dados + retornos dos diálogos | Média — defesa em profundidade (não há XSS conhecido) |
 | **Upgrade Electron/electron-builder** | Hoje `electron ^29` / `electron-builder ^24` têm CVEs conhecidas; upgrade é *breaking change* (Electron 43, electron-builder 26) | Baixa — avaliar quando houver tempo p/ testar a fundo |
 | **Upgrade node-telegram-bot-api** | 9 vulnerabilidades na árvore da lib `request` (depreciada); fix exige troca de major | Baixa — bot só fala com origens confiáveis |
 | **Assinatura de código do instalador** | O `.exe` não é assinado (Windows mostra "editor desconhecido") | Baixa — custo de certificado |
+
+> ✅ **Feito em 12/07/2026:** *Allowlist de caminhos nos IPC* (`read-file`/`write-file`/`delete-file`/`list-dir`/`file-exists` restritos a userData + pasta registrada + diálogos nativos) e *guardas de navegação* (`setWindowOpenHandler`/`will-navigate`). Ver SECURITY.md.
 
 ```
 Se for atacar algum destes, peça um diagnóstico atualizado de cada um antes
 de implementar — as versões de dependências mudam com o tempo.
 ```
 
-### 🧠 Validar (não implementar) — aprendizado do classificador (merchantMap)
-O sistema está **implementado** (`_merchantLearn`, `vezesCorrigido`,
-`autoAplicar` ao atingir 3 correções), mas o `merchantMap` no `gastos.json`
-está vazio (`{}`) — nunca foi exercitado na prática.
-
-```
-Faça uma correção manual de uma descrição de gasto importado da fatura
-(ex: "IFD*RAULINOS DELIVERY" → "Raulinos Delivery") 3 vezes em importações
-diferentes e confirme que, na 3ª vez, a correção já é aplicada automaticamente
-na pré-visualização (badge 🤖 auto).
-```
+### 🧠 ~~Validar — aprendizado do classificador (merchantMap)~~ ✅ Validado (12/07/2026)
+Exercitadas as funções reais: 1ª e 2ª correção da mesma descrição → **sugestão**
+(`suggested`); na **3ª**, `autoAplicar` liga e a importação seguinte
+**auto-aplica** a correção (`autoApplied`, descrição substituída). Prefixo `*`
+casa por `startsWith`. Funciona conforme planejado. *(dados de teste
+restaurados — merchantMap segue `{}` até o usuário corrigir de verdade)*.
 
 ---
 

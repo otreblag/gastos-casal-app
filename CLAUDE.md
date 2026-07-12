@@ -277,6 +277,8 @@ Corrige e memoriza descrições de fatura que a classificação por palavra-chav
 - Cadastro manual: aba Categorias → card de aprendizado → `saveMerchantMapping()` (já cria com `autoAplicar: true` direto)
 - Com `autoAplicar` ligado, a próxima importação de fatura já chega com a descrição/categoria corrigidas (`t.autoApplied = true`, badge `🤖 auto`); sem isso, aparece só como sugestão (`t.suggested`)
 
+**Validado (12/07/2026)** exercitando as funções reais: 1ª e 2ª correção da mesma descrição → aparece como **sugestão** (`suggested`); na **3ª** correção `autoAplicar` liga e a importação seguinte **auto-aplica** a correção (`autoApplied`, descrição já substituída). Chave com prefixo `*` casa por `startsWith` corretamente. Comportamento conforme o planejado.
+
 ---
 
 ## Metas Mensais e Gráfico de Evolução
@@ -540,6 +542,15 @@ webPreferences: {
 }
 ```
 Toda comunicação com o processo principal passa por `preload.js` (`contextBridge.exposeInMainWorld('electronAPI', ...)`). Não reintroduza `nodeIntegration: true` nem `contextIsolation: false`, e não desative o `sandbox`. O `sandbox: true` já era o default do Electron ≥20 quando `nodeIntegration:false` — foi tornado **explícito** para blindar contra regressão. O `preload.js` usa só `contextBridge` + `ipcRenderer`, ambos permitidos em preload sandboxed, então nada quebra.
+
+### Allowlist de caminhos nos IPC de arquivo (`main.js`)
+Defesa em profundidade: os IPC `read-file`/`write-file`/`delete-file`/`list-dir`/`file-exists` só operam em caminhos permitidos — um XSS teórico no renderer não consegue ler/escrever arquivos arbitrários do sistema. `_isPathAllowed(target)` (usa `path.resolve` + checagem de prefixo, bloqueia traversal) libera:
+- **`_allowedRoots`** (diretórios, recursivo): `app.getPath('userData')` (sempre, registrado no `whenReady`); a pasta de dados customizada persistida, registrada pelo renderer no `init()` via IPC `register-data-folder` (`window.electronAPI.registerDataFolder(appConfig.dataFolderPath)`); e qualquer pasta escolhida pelo usuário via `select-folder`.
+- **`_allowedFiles`** (arquivos exatos): os caminhos retornados por `save-file-dialog`/`open-file-dialog` — como vêm de um diálogo nativo, o renderer não consegue forjá-los.
+- Fora disso: `read`→`null`, `write`/`delete`→`false`, `list`→`[]`, com `console.warn` discreto. **Ao adicionar um novo caminho que o app precise ler/escrever, garanta que ele caia sob uma raiz permitida** (ou registre a pasta), senão a operação será bloqueada.
+
+### Guardas de navegação (`createWindow`)
+`win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))` nega abertura de novas janelas e `win.on('will-navigate')` bloqueia navegar para fora da URL local (`file://.../index.html`). O app é 100% local e nunca faz nenhum dos dois — isso limita o alcance de um renderer comprometido (sem popup, sem redirect para site externo).
 
 ### Content Security Policy (CSP)
 Aplicada a **todas** as respostas via `session.defaultSession.webRequest.onHeadersReceived` no `main.js` (função `applyCsp()`, chamada em `app.whenReady()` **antes** de `createWindow()`). Confirmado que o `onHeadersReceived` dispara para o protocolo `file://` neste Electron (29) — o header chega em cada resposta (documento, scripts do vendor, fontes). Política atual (constante `CSP_POLICY`):
