@@ -91,12 +91,35 @@ function checkForUpdates(manual = false) {
   });
 }
 
+// ─── ALLOWLIST DE CAMINHOS (defesa contra IPC read/write arbitrário) ──
+// read-file/write-file/delete-file/list-dir/file-exists só operam em caminhos
+// permitidos: a pasta de dados (userData + pasta customizada registrada) e os
+// arquivos/pastas escolhidos pelo usuário via diálogo nativo (que o renderer
+// não consegue forjar). Bloqueia um XSS teórico de ler/escrever fora disso.
+const _allowedRoots = new Set(); // diretórios (recursivo)
+const _allowedFiles = new Set(); // arquivos exatos (retornos de diálogo)
+
+function _addAllowedRoot(p) {
+  try { if (p) _allowedRoots.add(path.resolve(p)); } catch {}
+}
+function _isPathAllowed(target) {
+  let resolved;
+  try { resolved = path.resolve(String(target)); } catch { return false; }
+  if (_allowedFiles.has(resolved)) return true;
+  for (const root of _allowedRoots) {
+    if (resolved === root || resolved.startsWith(root + path.sep)) return true;
+  }
+  return false;
+}
+
 // ─── IPC HANDLERS ────────────────────────────────────────────────
 ipcMain.handle('read-file', (_event, filePath) => {
+  if (!_isPathAllowed(filePath)) { console.warn('[ipc] read-file negado — fora da allowlist'); return null; }
   try { return fs.readFileSync(filePath, 'utf8'); } catch { return null; }
 });
 
 ipcMain.handle('write-file', (_event, filePath, content) => {
+  if (!_isPathAllowed(filePath)) { console.warn('[ipc] write-file negado — fora da allowlist'); return false; }
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, content, 'utf8');
@@ -104,9 +127,24 @@ ipcMain.handle('write-file', (_event, filePath, content) => {
   } catch (e) { return false; }
 });
 
+// Registra a pasta de dados customizada (persistida) como raiz permitida.
+// Chamado pelo renderer no init com appConfig.dataFolderPath (se houver).
+ipcMain.handle('register-data-folder', (_event, folderPath) => {
+  try {
+    if (!folderPath) return false;
+    const r = path.resolve(String(folderPath));
+    if (!fs.existsSync(r) || !fs.statSync(r).isDirectory()) return false;
+    if (path.dirname(r) === r) return false; // é raiz de drive (ex: C:\) — recusa
+    _addAllowedRoot(r);
+    return true;
+  } catch { return false; }
+});
+
 ipcMain.handle('select-folder', async () => {
   const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
-  return result.canceled ? null : result.filePaths[0];
+  if (result.canceled) return null;
+  _addAllowedRoot(result.filePaths[0]); // pasta escolhida pelo usuário → permitida
+  return result.filePaths[0];
 });
 
 ipcMain.handle('get-default-data-path', () => {
@@ -118,22 +156,28 @@ ipcMain.handle('path-join', (_event, ...parts) => {
 });
 
 ipcMain.handle('file-exists', (_event, filePath) => {
+  if (!_isPathAllowed(filePath)) return false;
   return fs.existsSync(filePath);
 });
 
 ipcMain.handle('save-file-dialog', async (_event, options) => {
   const result = await dialog.showSaveDialog(win, options);
-  return result.canceled ? null : result.filePath;
+  if (result.canceled) return null;
+  _allowedFiles.add(path.resolve(result.filePath)); // arquivo escolhido → permitido
+  return result.filePath;
 });
 
 ipcMain.handle('open-file-dialog', async (_event, options) => {
   const result = await dialog.showOpenDialog(win, { ...options, properties: ['openFile'] });
-  return result.canceled ? null : result.filePaths[0];
+  if (result.canceled) return null;
+  _allowedFiles.add(path.resolve(result.filePaths[0])); // arquivo escolhido → permitido
+  return result.filePaths[0];
 });
 
 // Lista arquivos de um diretório (para os snapshots automáticos). Retorna
 // [{ name, mtime, size }]; diretório inexistente → []. Nunca lança.
 ipcMain.handle('list-dir', (_event, dirPath) => {
+  if (!_isPathAllowed(dirPath)) return [];
   try {
     if (!fs.existsSync(dirPath)) return [];
     return fs.readdirSync(dirPath, { withFileTypes: true })
@@ -148,6 +192,7 @@ ipcMain.handle('list-dir', (_event, dirPath) => {
 
 // Apaga um arquivo (usado no prune de snapshots antigos). Retorna bool.
 ipcMain.handle('delete-file', (_event, filePath) => {
+  if (!_isPathAllowed(filePath)) { console.warn('[ipc] delete-file negado — fora da allowlist'); return false; }
   try { fs.unlinkSync(filePath); return true; } catch { return false; }
 });
 
@@ -254,6 +299,14 @@ function createWindow() {
 
   win.loadFile(path.join(__dirname, 'src', 'index.html'));
   win.once('ready-to-show', () => win.show());
+
+  // Guardas de navegação: o app é 100% local e nunca abre novas janelas nem
+  // navega para outra URL. Nega ambos — limita o alcance de um renderer
+  // comprometido (não pode abrir popup nem redirecionar para site externo).
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (event, url) => {
+    if (url !== win.webContents.getURL()) event.preventDefault();
+  });
 
   // Minimize to tray instead of closing
   win.on('close', (event) => {
@@ -440,6 +493,7 @@ function applyCsp() {
 
 // ─── APP LIFECYCLE ────────────────────────────────────────────────
 app.whenReady().then(() => {
+  _addAllowedRoot(app.getPath('userData')); // pasta de dados padrão sempre permitida
   applyCsp();
   maybeImportOrphanData(); // antes de criar a janela: renderer já lê o gastos.json importado
   createWindow();

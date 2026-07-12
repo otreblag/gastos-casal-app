@@ -4162,6 +4162,11 @@ function dismissInvoiceAlert(alertKey) {
 async function init() {
   await loadAll();
   loadConfig();
+  // Registra a pasta de dados customizada na allowlist do main (se houver),
+  // para snapshots/saves nela continuarem permitidos após reiniciar o app.
+  if (isElectron() && appConfig.dataFolderPath) {
+    try { await window.electronAPI.registerDataFolder(appConfig.dataFolderPath); } catch {}
+  }
   await hydrateSecrets();
   setupCurrencyInputs();
   renderAppVersionInfo();
