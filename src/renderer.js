@@ -421,8 +421,10 @@ async function saveConfigSettings() {
   const newP2      = val('cfg-p2')      || DEFAULT_CONFIG.p2Name;
   const newCouple  = val('cfg-couple')  || DEFAULT_CONFIG.coupleName;
   const newCompany = val('cfg-company') || DEFAULT_CONFIG.companyName;
-  const newToken   = val('tg-token');
-  const newGroup   = val('tg-group');
+  // Os campos tg-token/tg-group foram removidos da UI (bot interno desativado —
+  // configuração fica no Render). Se ausentes, preserva o valor já armazenado.
+  const newToken   = document.getElementById('tg-token') ? val('tg-token') : (appConfig.tgToken || '');
+  const newGroup   = document.getElementById('tg-group') ? val('tg-group') : (appConfig.tgGroup || '');
 
   const oldP1     = appConfig.p1Name;
   const oldP2     = appConfig.p2Name;
@@ -2983,31 +2985,27 @@ function addLog(msg, type='') {
   el.appendChild(div); el.scrollTop=el.scrollHeight;
 }
 
-function toggleBot() { if (botRunning) stopBot(); else startBot(); }
+// ─── BOT INTERNO — DESATIVADO (deprecated) ────────────────────────
+// O bot roda 24/7 no Render (servidor externo). O bot interno do Electron foi
+// removido da UI (não há mais botão "Iniciar bot" nem badge de status) porque
+// ligá-lo causa erro 409 (conflito de polling com o bot do Render). Estas
+// funções ficam como no-op defensivo — caso algo antigo as chame, não fazem
+// nada e não referenciam elementos de UI que não existem mais.
+// `pollTelegram()` é mantida abaixo apenas como referência do formato do bot;
+// não é mais agendada por ninguém.
+function toggleBot() { startBot(); }
 
+/** @deprecated Bot interno desativado — o bot externo (Render) é o único ativo. */
 function startBot() {
-  const cfg=getConfig();
-  if (!cfg.tgToken||!cfg.tgGroup) { notify('Preencha Token e ID do Grupo nas Configurações!','err'); return; }
-  botRunning=true;
-  document.getElementById('bot-dot').classList.add('on');
-  document.getElementById('bot-label').textContent='Bot ativo';
-  document.getElementById('btn-bot').textContent='⏹ Parar';
-  addLog('Bot iniciado! Monitorando grupo '+cfg.tgGroup,'ok');
-  // Persist state so app auto-starts bot on next launch
-  appConfig.botWasRunning = true;
-  saveConfigToStorage();
-  pollTelegram(cfg);
-  botInterval=setInterval(()=>pollTelegram(cfg),4000);
+  console.warn('[bot] startBot() ignorado — bot interno desativado (o bot roda no Render).');
+  notify('O bot roda 24/7 no Render. Não há bot interno no app.', 'info');
 }
 
+/** @deprecated Bot interno desativado. */
 function stopBot() {
-  botRunning=false; clearInterval(botInterval);
-  document.getElementById('bot-dot').classList.remove('on');
-  document.getElementById('bot-label').textContent='Bot off';
-  document.getElementById('btn-bot').textContent='▶ Iniciar bot';
-  addLog('Bot parado.','err');
+  if (botInterval) clearInterval(botInterval);
+  botRunning = false;
   appConfig.botWasRunning = false;
-  saveConfigToStorage();
 }
 
 async function pollTelegram(cfg) {

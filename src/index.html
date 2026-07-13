@@ -54,9 +54,6 @@
     .header-title .brand-gold{color:#C9A24B}
     .header-right{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
     .app-version-badge{position:fixed;bottom:6px;left:10px;font-size:10px;color:var(--muted);opacity:.5;letter-spacing:.02em;pointer-events:none;z-index:5;user-select:none}
-    .bot-pill{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted);background:var(--faint);padding:4px 11px;border-radius:6px;border:1px solid var(--border);letter-spacing:.03em;font-weight:500}
-    .dot{width:6px;height:6px;border-radius:50%;background:#C8C5BE;flex-shrink:0;transition:background .3s}
-    .dot.on{background:#3A9E6E;animation:pulse 2.5s infinite}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
     select.month{width:auto;flex-shrink:0;font-size:11px;border:1px solid var(--border);border-radius:6px;padding:5px 10px;background:var(--faint);color:var(--text);cursor:pointer;letter-spacing:.01em;font-weight:500;font-family:inherit}
 
@@ -318,8 +315,6 @@
       <button class="ctx-btn active" data-ctx="pessoal" onclick="switchContext('pessoal')">💑 Pessoal</button>
       <button class="ctx-btn" data-ctx="empresa" onclick="switchContext('empresa')">🏢 Empresa</button>
     </div>
-    <div class="bot-pill"><span class="dot" id="bot-dot"></span><span id="bot-label">Bot off</span></div>
-    <button class="btn btn-secondary" style="font-size:11px;padding:4px 10px" id="btn-bot" onclick="toggleBot()">▶ Iniciar bot</button>
     <select class="month" id="month-sel" onchange="onMonthChange()"></select>
     <button class="theme-btn" id="theme-btn" onclick="toggleTheme()" title="Alternar tema claro/escuro">🌙</button>
   </div>
@@ -648,12 +643,9 @@
     <!-- Bot Telegram -->
     <div class="card">
       <div class="card-title">🤖 Bot Telegram</div>
-      <div class="form-row cols2" style="margin-bottom:10px">
-        <div><label>Token do Bot</label><input type="password" id="tg-token" placeholder="1234567890:ABCdef..." /><div class="hint">@BotFather → /newbot</div></div>
-        <div><label>ID do Grupo</label><input type="text" id="tg-group" placeholder="-5288634602" /><div class="hint">Adicione @userinfobot ao grupo</div></div>
-      </div>
-      <div class="btn-row" style="margin-top:0">
-        <button class="btn btn-secondary" onclick="testBot()">🔍 Testar bot</button>
+      <div style="font-size:12.5px;color:var(--muted);background:var(--faint);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:8px;padding:11px 13px;line-height:1.6">
+        O bot roda <strong>24/7 no Render</strong> (servidor externo). Configure o token do bot e o ID do grupo nas <strong>variáveis de ambiente do serviço</strong> (<code>TELEGRAM_TOKEN</code> / <code>TELEGRAM_GROUP_ID</code>), <strong>não aqui</strong>.<br>
+        Este app apenas <strong>lê</strong> os gastos que o bot grava na planilha, via a sincronização com o Google Sheets (card abaixo). Não existe mais bot interno no app — ele foi desativado para evitar conflito com o bot do Render.
       </div>
     </div>
 
@@ -798,13 +790,11 @@
 
     <!-- Instructions -->
     <div class="card">
-      <div class="card-title">📖 Como configurar o bot</div>
+      <div class="card-title">📖 Como funciona o bot</div>
       <div class="step-list">
-        <div class="step-item"><div class="step-num">1</div><div>Telegram → <strong>@BotFather</strong> → <code>/newbot</code> → copie o Token</div></div>
-        <div class="step-item"><div class="step-num">2</div><div>Crie um grupo e adicione o bot como membro</div></div>
-        <div class="step-item"><div class="step-num">3</div><div>Adicione <strong>@userinfobot</strong> ao grupo para obter o ID do grupo</div></div>
-        <div class="step-item"><div class="step-num">4</div><div>Preencha Token e ID do Grupo acima → Salvar configurações</div></div>
-        <div class="step-item"><div class="step-num">5</div><div>Clique em <strong>▶ Iniciar bot</strong> no topo → mande no grupo: <code>Mercado 87,50</code> 🎉</div></div>
+        <div class="step-item"><div class="step-num">1</div><div>O bot roda <strong>24/7 no Render</strong>. Token e ID do grupo ficam nas <strong>variáveis de ambiente do serviço</strong> (<code>TELEGRAM_TOKEN</code> / <code>TELEGRAM_GROUP_ID</code>), não no app.</div></div>
+        <div class="step-item"><div class="step-num">2</div><div>Mande no grupo do Telegram: <code>Mercado 87,50</code> — o bot classifica e grava na planilha do Google.</div></div>
+        <div class="step-item"><div class="step-num">3</div><div>Preencha acima a <strong>URL do Apps Script</strong> e o <strong>token secreto</strong> para o app puxar esses gastos automaticamente. 🎉</div></div>
       </div>
     </div>
 

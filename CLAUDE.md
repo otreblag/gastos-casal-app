@@ -122,7 +122,7 @@ Salvaguardas implementadas em `renderer.js`:
 2. O bloco de auto-start foi removido — não há mais `setTimeout(startBot, ...)` na inicialização
 3. Um `addLog()` informativo é exibido ao abrir o app: `"Bot externo ativo (Render)..."`
 
-O botão "▶ Iniciar bot" na UI ainda existe e pode ser usado manualmente para testes emergenciais, mas não deve ser ativado em uso normal.
+O botão "▶ Iniciar bot" e o badge de status ("Bot off"/"Bot ativo") **foram removidos do header** (evita que um clique acidental quebre o bot de produção com erro 409). As funções `startBot()`/`stopBot()`/`toggleBot()` viraram **no-op deprecated** (mantidas só para não quebrar chamadas antigas; `startBot()` apenas mostra um `notify` informativo). Na aba Config, a seção "🤖 Bot Telegram" não tem mais campos de token/grupo — só uma nota informando que a configuração fica nas variáveis de ambiente do Render. `pollTelegram()`/`testBot()` continuam no código como referência morta, mas não são mais agendadas/chamadas por nada.
 
 **Fluxo do bot externo:**
 1. Bot no Render recebe mensagem do grupo Telegram via polling
@@ -348,7 +348,7 @@ O backup manual (com/sem senha) segue idêntico e independente — o automático
 ### Header (`.header`, fora das abas)
 ```
 .header-brand → .header-title "FIN[ANN dourado #C9A24B]ZA" — sem logo, sem slogan
-.header-right → ctx-toggle (Pessoal/Empresa) · bot-pill + btn Iniciar bot · select #month-sel · theme-btn
+.header-right → ctx-toggle (Pessoal/Empresa) · select #month-sel · theme-btn  (botão/badge do bot removidos)
 ```
 Sem `<img>` de logo (removido — nome estilizado é a identidade visual) e sem subtítulo. Borda inferior `2px solid #B8913A` separando do `.tabs`. `select.month` tem `width:auto;flex-shrink:0` explícito — sem isso, a regra global `input,...,select{width:100%}` (index.html) faz o select ocupar 100% do `.header-right` e quebra os outros controles em linhas.
 
