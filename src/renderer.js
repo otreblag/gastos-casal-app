@@ -26,6 +26,12 @@ let cards       = [];
 let monthGoals  = [];
 let merchantMap = {};
 let acertos     = []; // { id, de, para, valor, data (DD/MM/YYYY), nota, contexto, criadoEm }
+// Pagamento da fatura de cada mês por cartão do casal — quem quitou de fato aquela
+// fatura VARIA mês a mês (dividido / uma pessoa / valores personalizados). Ausência
+// de registro = "dividido" (default). Ver seção Divisão.
+// { cardId, mesCompetencia ('YYYY-MM'), formaPagamento: 'dividido'|'p1'|'p2'|'personalizado',
+//   valorGabriel, valorAnna, pago, dataPagamento, contexto }
+let faturaPagamentos = [];
 
 // ─── LIST FILTER / SORT STATE (never persisted — reset on tab switch) ──────
 let _listFilters = { pessoa: null, dateFrom: '', dateTo: '', valorMin: null, valorMax: null, metodo: null, cardId: null, origem: null };
@@ -279,7 +285,7 @@ async function resolveDataFilePath() {
 }
 
 async function saveAll() {
-  const data = { expenses, customCats, budgets, fixedExpenses, cards, monthGoals, merchantMap, acertos, deletedIds: [...deletedExpenseIds] };
+  const data = { expenses, customCats, budgets, fixedExpenses, cards, monthGoals, merchantMap, acertos, faturaPagamentos, deletedIds: [...deletedExpenseIds] };
   if (isElectron()) {
     const filePath = await resolveDataFilePath();
     const ok = await window.electronAPI.writeFile(filePath, JSON.stringify(data, null, 2));
@@ -295,6 +301,7 @@ async function saveAll() {
       localStorage.setItem('gc_cards',       JSON.stringify(cards));
       localStorage.setItem('gc_merchantmap', JSON.stringify(merchantMap));
       localStorage.setItem('gc_acertos',    JSON.stringify(acertos));
+      localStorage.setItem('gc_faturapag',  JSON.stringify(faturaPagamentos));
     } catch { notify('Erro ao salvar. Armazenamento cheio?', 'err'); }
   }
 }
@@ -317,7 +324,8 @@ async function loadAll() {
         monthGoals  = asArray(data.monthGoals);
         merchantMap = asObject(data.merchantMap);
         acertos     = asArray(data.acertos);
-      } catch { expenses = []; customCats = []; budgets = []; fixedExpenses = []; monthGoals = []; cards = []; merchantMap = {}; acertos = []; }
+        faturaPagamentos = asArray(data.faturaPagamentos);
+      } catch { expenses = []; customCats = []; budgets = []; fixedExpenses = []; monthGoals = []; cards = []; merchantMap = {}; acertos = []; faturaPagamentos = []; }
     }
   } else {
     try {
@@ -329,7 +337,8 @@ async function loadAll() {
       cards         = asArray(JSON.parse(localStorage.getItem('gc_cards')        || '[]'));
       merchantMap   = asObject(JSON.parse(localStorage.getItem('gc_merchantmap')  || '{}'));
       acertos       = asArray(JSON.parse(localStorage.getItem('gc_acertos')      || '[]'));
-    } catch { expenses = []; customCats = []; budgets = []; fixedExpenses = []; monthGoals = []; cards = []; merchantMap = {}; acertos = []; }
+      faturaPagamentos = asArray(JSON.parse(localStorage.getItem('gc_faturapag') || '[]'));
+    } catch { expenses = []; customCats = []; budgets = []; fixedExpenses = []; monthGoals = []; cards = []; merchantMap = {}; acertos = []; faturaPagamentos = []; }
   }
 }
 
@@ -1637,7 +1646,7 @@ function buildBackupPayload() {
     appVersion: '2.0',
     backupDate: new Date().toISOString(),
     expenses, customCats, budgets, fixedExpenses, cards, monthGoals,
-    merchantMap, acertos,
+    merchantMap, acertos, faturaPagamentos,
     deletedIds: [...deletedExpenseIds],
     config: safeConfig,
   };
@@ -1903,7 +1912,7 @@ async function executeRestore() {
       const folder  = appConfig.dataFolderPath;
       const base    = folder || (await window.electronAPI.getDefaultDataPath());
       const snapshot = JSON.stringify(
-        { expenses, customCats, budgets, fixedExpenses, cards, monthGoals, merchantMap, acertos, deletedIds: [...deletedExpenseIds] }, null, 2
+        { expenses, customCats, budgets, fixedExpenses, cards, monthGoals, merchantMap, acertos, faturaPagamentos, deletedIds: [...deletedExpenseIds] }, null, 2
       );
       await _rotatePreRestore(base, snapshot);
     } catch { /* non-fatal */ }
@@ -1918,6 +1927,7 @@ async function executeRestore() {
   monthGoals         = normalized.monthGoals;
   merchantMap        = normalized.merchantMap || {};
   acertos            = normalized.acertos     || [];
+  faturaPagamentos   = normalized.faturaPagamentos || [];
   deletedExpenseIds  = new Set((normalized.deletedIds || []).map(String));
 
   if (normalized.config) {
@@ -1958,6 +1968,7 @@ function migrateData(data) {
   data.monthGoals    = asArray(data.monthGoals);
   data.merchantMap   = asObject(data.merchantMap);
   data.acertos       = asArray(data.acertos);
+  data.faturaPagamentos = asArray(data.faturaPagamentos);
   data.deletedIds    = asArray(data.deletedIds);
   // Backfill missing mesCompetencia (fallback: purchase month)
   data.expenses.forEach(e => {
@@ -2498,7 +2509,61 @@ function renderFixedList() {
 }
 
 // ─── DIVISÃO ──────────────────────────────────────────────────────
-// ─── ANNUAL BALANCE ───────────────────────────────────────────────
+// ─── DIVISÃO POR FATURA ───────────────────────────────────────────
+// O pagador é propriedade da FATURA DE CADA MÊS (não do cartão): quem quita a
+// fatura do cartão do Casal varia mês a mês. Cada fatura do Casal (cartão de
+// crédito com dono === coupleName, agrupada por mês de competência) tem um
+// registro em faturaPagamentos com a forma de pagamento. Ausência = "dividido".
+
+const _isCoupleCard = c => c && c.dono === appConfig.coupleName;
+function _coupleCardIds() {
+  return new Set(cards.filter(_isCoupleCard).map(c => c.id));
+}
+
+// Resolve quanto cada um pagou de uma fatura (cardId + mês), dado o total atual.
+// dividido/p1/p2 são recalculados do total vigente; personalizado usa os valores
+// salvos. Retorna { formaPagamento, valorGabriel, valorAnna, pago, dataPagamento, rec }.
+function _faturaSplit(cardId, mesComp, total) {
+  const rec = faturaPagamentos.find(f =>
+    f.cardId === cardId && f.mesCompetencia === mesComp &&
+    (!f.contexto || f.contexto === currentContext));
+  const half = Math.round((total / 2) * 100) / 100;
+  const base = { pago: rec?.pago || false, dataPagamento: rec?.dataPagamento || '', rec };
+  const forma = rec?.formaPagamento || 'dividido';
+  if (forma === 'p1')            return { formaPagamento:'p1',            valorGabriel: total, valorAnna: 0,     ...base };
+  if (forma === 'p2')            return { formaPagamento:'p2',            valorGabriel: 0,     valorAnna: total, ...base };
+  if (forma === 'personalizado') return { formaPagamento:'personalizado', valorGabriel: Number(rec.valorGabriel)||0, valorAnna: Number(rec.valorAnna)||0, ...base };
+  return { formaPagamento:'dividido', valorGabriel: half, valorAnna: total - half, ...base };
+}
+
+// Agrupa os gastos do Casal de um mês em faturas (cartão do Casal) e gastos
+// manuais, e soma quanto cada um adiantou. Gastos manuais do Casal (não-fatura)
+// são tratados como divididos (metade cada → sem dívida) por padrão.
+function _monthCouplePaid(sharedExp, mesComp) {
+  const coupleIds = _coupleCardIds();
+  const byCard = {};
+  let manualTotal = 0;
+  for (const e of sharedExp) {
+    if (e.metodo === 'Crédito' && e.cardId && coupleIds.has(e.cardId)) {
+      (byCard[e.cardId] = byCard[e.cardId] || []).push(e);
+    } else {
+      manualTotal += e.valor;
+    }
+  }
+  let p1Paid = 0, p2Paid = 0;
+  const faturas = [];
+  for (const cardId of Object.keys(byCard)) {
+    const total = byCard[cardId].reduce((s, e) => s + e.valor, 0);
+    const sp = _faturaSplit(cardId, mesComp, total);
+    p1Paid += sp.valorGabriel;
+    p2Paid += sp.valorAnna;
+    faturas.push({ cardId, card: cards.find(c => c.id === cardId), total, count: byCard[cardId].length, mesComp, ...sp });
+  }
+  const manualHalf = manualTotal / 2;
+  p1Paid += manualHalf;
+  p2Paid += manualHalf;
+  return { p1Paid, p2Paid, faturas, manualTotal };
+}
 
 function _calcAnnualBalance(year) {
   const p1 = appConfig.p1Name, p2 = appConfig.p2Name;
@@ -2521,8 +2586,10 @@ function _calcAnnualBalance(year) {
         : (e.data.includes('/') ? parseDateStr(e.data) : e.data).slice(0, 7);
       return mk === month && (!e.contexto || e.contexto === currentContext);
     });
-    const p1Paid = monthExp.filter(e => e.pessoa === p1).reduce((s, e) => s + e.valor, 0);
-    const p2Paid = monthExp.filter(e => e.pessoa === p2).reduce((s, e) => s + e.valor, 0);
+    // Only shared ("Casal") expenses enter the couple's division. Personal expenses
+    // (pessoa === p1/p2) are 100% that person's own responsibility — never split.
+    const sharedExp = monthExp.filter(e => e.pessoa === appConfig.coupleName);
+    const { p1Paid, p2Paid } = _monthCouplePaid(sharedExp, month);
     const monthDiff = p1Paid - p2Paid;
     runningBalance += monthDiff;
     const monthAcertos = yearAcertos.filter(a => {
@@ -2554,9 +2621,9 @@ function renderAnnualBalance() {
   const currentYear  = currentMonth.split('-')[0];
 
   let html = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">
-    ${escapeHtml(p1)} gastou <strong>${fmt(annualP1)}</strong> no ano ·
-    ${escapeHtml(p2)} gastou <strong>${fmt(annualP2)}</strong> no ano`;
-  if (annualTotal > 0) html += ` · Total: <strong>${fmt(annualTotal)}</strong>`;
+    ${escapeHtml(p1)} adiantou <strong>${fmt(annualP1)}</strong> em gastos do Casal ·
+    ${escapeHtml(p2)} adiantou <strong>${fmt(annualP2)}</strong>`;
+  if (annualTotal > 0) html += ` · Total Casal: <strong>${fmt(annualTotal)}</strong>`;
   html += `</div>`;
 
   if (annualTotal > 0) {
@@ -2671,49 +2738,158 @@ function deleteAcerto(id) {
   renderAnnualBalance();
 }
 
+// Localiza (ou cria) o registro de pagamento de uma fatura do mês corrente.
+function _getOrCreateFaturaPag(cardId, mesComp) {
+  let rec = faturaPagamentos.find(f => f.cardId === cardId && f.mesCompetencia === mesComp &&
+    (!f.contexto || f.contexto === currentContext));
+  if (!rec) {
+    rec = { cardId, mesCompetencia: mesComp, formaPagamento: 'dividido',
+      valorGabriel: 0, valorAnna: 0, pago: false, dataPagamento: '', contexto: currentContext };
+    faturaPagamentos.push(rec);
+  }
+  return rec;
+}
+
+function setFaturaForma(cardId, mesComp, forma) {
+  const rec = _getOrCreateFaturaPag(cardId, mesComp);
+  rec.formaPagamento = forma;
+  if (forma === 'personalizado' && !(rec.valorGabriel || rec.valorAnna)) {
+    const shared = contextMonthExpenses().filter(e => e.pessoa === appConfig.coupleName);
+    const f = _monthCouplePaid(shared, mesComp).faturas.find(x => x.cardId === cardId);
+    const half = f ? Math.round((f.total/2)*100)/100 : 0;
+    rec.valorGabriel = half; rec.valorAnna = f ? f.total - half : 0;
+  }
+  saveAll();
+  renderDivisao();
+}
+
+function saveFaturaPersonalizado(cardId, mesComp) {
+  const rec = _getOrCreateFaturaPag(cardId, mesComp);
+  rec.formaPagamento = 'personalizado';
+  rec.valorGabriel = parseCurrencyInput(document.getElementById('fat-vg-' + cardId)?.value);
+  rec.valorAnna    = parseCurrencyInput(document.getElementById('fat-va-' + cardId)?.value);
+  saveAll();
+  renderDivisao();
+  notify('Valores da fatura salvos.', 'ok');
+}
+
+function toggleFaturaPago(cardId, mesComp) {
+  const rec = _getOrCreateFaturaPag(cardId, mesComp);
+  rec.pago = !rec.pago;
+  rec.dataPagamento = rec.pago ? new Date().toLocaleDateString('pt-BR') : '';
+  saveAll();
+  renderDivisao();
+}
+
+// Cards de fatura do Casal do mês corrente, com seletor de forma de pagamento.
+function renderFaturasDivisao(sharedExp) {
+  const el = document.getElementById('faturas-divisao');
+  const monthLbl = document.getElementById('faturas-divisao-month');
+  if (monthLbl) monthLbl.textContent = '— ' + formatMonth(currentMonth);
+  if (!el) return;
+  const p1 = appConfig.p1Name, p2 = appConfig.p2Name;
+  const { faturas } = _monthCouplePaid(sharedExp, currentMonth);
+  if (!faturas.length) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon">💳</div>Nenhuma fatura do Casal neste mês.<br><span style="font-size:11px">Só cartões de crédito com dono "Casal" geram fatura para dividir.</span></div>';
+    return;
+  }
+  el.innerHTML = faturas.map(f => {
+    const cor  = f.card?.cor || '#7A3F5E';
+    const half = f.total / 2;
+    const dg   = f.valorGabriel - half; // saldo de p1 (>0 = a receber de p2)
+    let debtLine;
+    if (Math.abs(dg) < 0.01) debtLine = `<span style="color:var(--success)">✅ Ninguém deve nada</span>`;
+    else if (dg > 0)         debtLine = `<strong>${escapeHtml(p2)}</strong> deve <strong>${fmt(Math.abs(dg))}</strong> para <strong>${escapeHtml(p1)}</strong>`;
+    else                     debtLine = `<strong>${escapeHtml(p1)}</strong> deve <strong>${fmt(Math.abs(dg))}</strong> para <strong>${escapeHtml(p2)}</strong>`;
+    const btn = (val, label) => `<button class="btn ${f.formaPagamento===val?'btn-primary':'btn-secondary'}" style="font-size:11px;padding:5px 10px" onclick="setFaturaForma('${f.cardId}','${currentMonth}','${val}')">${escapeHtml(label)}</button>`;
+    const custom = f.formaPagamento === 'personalizado' ? `
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:end">
+        <div><label style="font-size:10px;color:var(--muted)">${escapeHtml(p1)} pagou</label><input type="text" id="fat-vg-${escapeHtml(f.cardId)}" inputmode="numeric" value="${f.valorGabriel.toFixed(2).replace('.',',')}" style="width:110px;font-size:12px" /></div>
+        <div><label style="font-size:10px;color:var(--muted)">${escapeHtml(p2)} pagou</label><input type="text" id="fat-va-${escapeHtml(f.cardId)}" inputmode="numeric" value="${f.valorAnna.toFixed(2).replace('.',',')}" style="width:110px;font-size:12px" /></div>
+        <button class="btn btn-secondary" style="font-size:11px;padding:6px 10px" onclick="saveFaturaPersonalizado('${f.cardId}','${currentMonth}')">Salvar</button>
+        <span style="font-size:10px;color:var(--muted)">Total: ${fmt(f.total)}</span>
+      </div>` : '';
+    return `<div style="border:1px solid var(--border);border-left:3px solid ${escapeHtml(cor)};border-radius:9px;padding:12px 14px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">
+        <div style="font-size:14px;font-weight:700">💳 ${escapeHtml(f.card?.nome||'Cartão')}${f.card?.final?` <span style="font-family:monospace;color:var(--muted);font-size:11px">•${escapeHtml(f.card.final)}</span>`:''}</div>
+        <div style="font-size:16px;font-weight:700;font-variant-numeric:tabular-nums">${fmt(f.total)}</div>
+      </div>
+      <div style="font-size:10px;color:var(--muted);margin:2px 0 9px">${f.count} lançamento${f.count!==1?'s':''} · ${formatMonth(currentMonth)}</div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap">
+        ${btn('dividido','Dividido 50/50')}
+        ${btn('p1', p1 + ' pagou tudo')}
+        ${btn('p2', p2 + ' pagou tudo')}
+        ${btn('personalizado','Personalizado')}
+      </div>
+      ${custom}
+      <div style="font-size:12px;margin-top:9px;padding-top:9px;border-top:1px solid var(--border)">${debtLine}</div>
+      <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
+        <button class="btn ${f.pago?'btn-success':'btn-secondary'}" style="font-size:11px;padding:5px 10px" onclick="toggleFaturaPago('${f.cardId}','${currentMonth}')">${f.pago?'✅ Paga':'Marcar como paga'}</button>
+        ${f.pago&&f.dataPagamento?`<span style="font-size:10px;color:var(--muted)">em ${escapeHtml(f.dataPagamento)}</span>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
 function renderDivisao() {
   renderAnnualBalance();
   const me = contextMonthExpenses();
-  const personTotals = {};
-  me.forEach(e => personTotals[e.pessoa] = (personTotals[e.pessoa]||0)+e.valor);
-  const total   = Object.values(personTotals).reduce((a,b)=>a+b,0);
-  const people  = Object.keys(personTotals);
   const pColors = getPersonColors();
   const p1 = appConfig.p1Name, p2 = appConfig.p2Name;
+  const coupleName = appConfig.coupleName;
+
+  // Only shared ("Casal") expenses enter the couple's division. Personal expenses
+  // (pessoa === p1/p2, from personal cards or manual personal entries) are 100% the
+  // owner's responsibility and never create a debt between the two.
+  const shared      = me.filter(e => e.pessoa === coupleName);
+  const sharedTotal = shared.reduce((s,e)=>s+e.valor,0);
+  // Novo modelo: quem adiantou vem das faturas do mês (forma de pagamento por
+  // fatura) + gastos manuais do Casal (divididos por padrão).
+  const { p1Paid, p2Paid } = _monthCouplePaid(shared, currentMonth);
+
+  renderFaturasDivisao(shared);
 
   const balEl = document.getElementById('balance-summary');
-  if (!me.length) {
-    balEl.innerHTML = '<div class="empty"><div class="empty-icon">⚖️</div>Nenhum gasto registrado.</div>';
+  if (!shared.length) {
+    balEl.innerHTML = '<div class="empty"><div class="empty-icon">⚖️</div>Nenhum gasto do Casal neste mês.<br><span style="font-size:11px">Gastos pessoais não entram na divisão.</span></div>';
   } else {
-    const p1Total = personTotals[p1]||0, p2Total = personTotals[p2]||0;
-    const diff    = p1Total - p2Total;
+    const diff = p1Paid - p2Paid;
     let html = `<div style="display:flex;flex-direction:column;gap:8px">
-      <div style="font-size:12px;color:var(--muted)">Total do mês: <strong>${fmt(total)}</strong> · Divisão igualitária: <strong>${fmt(total/2)}</strong> cada</div>`;
+      <div style="font-size:12px;color:var(--muted)">Gastos do Casal: <strong>${fmt(sharedTotal)}</strong> · Divisão igualitária: <strong>${fmt(sharedTotal/2)}</strong> cada</div>`;
     if (Math.abs(diff) > 0.01) {
       const debtor   = diff>0 ? escapeHtml(p2) : escapeHtml(p1);
       const creditor = diff>0 ? escapeHtml(p1) : escapeHtml(p2);
       html += `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:9px;padding:10px 14px">
         <div style="font-size:13px;font-weight:600;color:var(--success)">💸 Acerto de contas</div>
         <div style="font-size:13px;margin-top:4px"><strong>${debtor}</strong> deve <strong class="split-balance-pos">${fmt(Math.abs(diff)/2)}</strong> para <strong>${creditor}</strong></div>
-        <div style="font-size:11px;color:var(--muted);margin-top:2px">${escapeHtml(p1)} gastou ${fmt(p1Total)} · ${escapeHtml(p2)} gastou ${fmt(p2Total)}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${escapeHtml(p1)} adiantou ${fmt(p1Paid)} · ${escapeHtml(p2)} adiantou ${fmt(p2Paid)}</div>
       </div>`;
     } else {
-      html += `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:9px;padding:10px 14px;font-size:13px;color:var(--success)">✅ Gastos equilibrados! Nenhum acerto necessário.</div>`;
+      html += `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:9px;padding:10px 14px;font-size:13px;color:var(--success)">✅ Contas do Casal equilibradas! Nenhum acerto necessário.</div>`;
     }
     balEl.innerHTML = html + '</div>';
   }
 
-  document.getElementById('person-breakdown').innerHTML = people.length ? people.map(p => {
-    const pc=pColors[p]||'#888', ptotal=personTotals[p];
-    const catBreak={};
-    me.filter(e=>e.pessoa===p).forEach(e=>catBreak[e.categoria]=(catBreak[e.categoria]||0)+e.valor);
-    const catLines=Object.entries(catBreak).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<span class="badge">${escapeHtml(c)}: ${fmt(v)}</span>`).join(' ');
-    return `<div style="padding:10px 0;border-bottom:1px solid var(--border)">
-      <div style="display:flex;justify-content:space-between;margin-bottom:5px">
-        <span style="font-weight:600;color:${pc}">${escapeHtml(p)}</span><span style="font-weight:600">${fmt(ptotal)}</span>
-      </div><div style="display:flex;gap:4px;flex-wrap:wrap">${catLines}</div>
-    </div>`;
-  }).join('') : '<div class="empty">Nenhum dado.</div>';
+  // No novo modelo a atribuição é por fatura (não por gasto), então aqui só
+  // mostramos quanto cada um adiantou e onde o Casal gastou (por categoria).
+  const catBreakAll = {};
+  shared.forEach(e => catBreakAll[e.categoria] = (catBreakAll[e.categoria]||0) + e.valor);
+  const catLinesAll = Object.entries(catBreakAll).sort((a,b)=>b[1]-a[1])
+    .map(([c,v]) => `<span class="badge">${escapeHtml(c)}: ${fmt(v)}</span>`).join(' ');
+  document.getElementById('person-breakdown').innerHTML = shared.length ? `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <div style="flex:1;min-width:140px;background:var(--faint);border:1px solid var(--border);border-radius:8px;padding:9px 13px">
+        <div style="font-size:11px;color:var(--muted)">${escapeHtml(p1)} adiantou</div>
+        <div style="font-size:17px;font-weight:700;color:${pColors[p1]||'#888'};font-variant-numeric:tabular-nums">${fmt(p1Paid)}</div>
+      </div>
+      <div style="flex:1;min-width:140px;background:var(--faint);border:1px solid var(--border);border-radius:8px;padding:9px 13px">
+        <div style="font-size:11px;color:var(--muted)">${escapeHtml(p2)} adiantou</div>
+        <div style="font-size:17px;font-weight:700;color:${pColors[p2]||'#888'};font-variant-numeric:tabular-nums">${fmt(p2Paid)}</div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:5px">Onde o Casal gastou:</div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap">${catLinesAll}</div>
+  ` : '<div class="empty">Nenhum gasto do Casal.</div>';
 
   const instEl = document.getElementById('installments-list');
   const instExp = expenses.filter(e=>e.installment&&e.installment.current<e.installment.total);
@@ -3410,18 +3586,18 @@ function _renderInvoicePreview(transactions) {
   });
   const hasPerRowCards  = uniqueCardIds.length > 1;
   const singleDetected  = !hasPerRowCards && uniqueCardIds.length === 1;
+  const allDetected     = txCardIds.length > 0 && txCardIds.every(Boolean);
 
   // Auto-select top selector when all rows come from the same detected card
   const invoiceCardSel = document.getElementById('invoice-card-select');
   if (singleDetected && invoiceCardSel) invoiceCardSel.value = uniqueCardIds[0];
 
-  // Update hint text based on detection result
-  const hintEl = invoiceCardSel?.parentElement?.querySelector('.hint');
-  if (hintEl) {
-    if (hasPerRowCards)    hintEl.textContent = 'Cartão detectado por linha — use o seletor acima como padrão para linhas sem detecção.';
-    else if (singleDetected) hintEl.textContent = 'Cartão detectado automaticamente pela coluna "Final do Cartão".';
-    else                   hintEl.textContent  = 'A pessoa titular do cartão será atribuída automaticamente aos lançamentos.';
-  }
+  // The top selector is only a fallback for rows whose card wasn't auto-detected.
+  // When every row was detected by the "Final do Cartão" column, hide it entirely.
+  const selWrap  = document.getElementById('invoice-card-select-wrap');
+  const allDetEl = document.getElementById('invoice-card-alldetected');
+  if (selWrap)  selWrap.style.display  = allDetected ? 'none' : 'block';
+  if (allDetEl) allDetEl.style.display = allDetected ? 'block' : 'none';
 
   const total = transactions.reduce((a,t) => a + t.valorBR, 0);
   document.getElementById('invoice-summary').innerHTML =
@@ -3629,26 +3805,14 @@ function confirmInvoiceImport() {
       installment: null, fixedId: null, contexto: currentContext,
     };
 
-    const isCouple = rowCard?.dono === appConfig.coupleName;
-    const divisao  = rowCard?.divisao ?? 100;
-
-    if (isCouple && divisao > 0 && divisao < 100) {
-      // Split into two entries — one per person — with the original key stored for dedup
-      const pct1 = divisao / 100;
-      const pct2 = 1 - pct1;
-      expenses.unshift({ ...baseEntry, id: Date.now() + Math.random() * 0.3 + count,
-        valor: parseFloat((valor * pct1).toFixed(2)), pessoa: appConfig.p1Name,
-        splitOf: valor, splitPct: pct1 * 100, splitPct2: null, _faturaKey: key });
-      expenses.unshift({ ...baseEntry, id: Date.now() + Math.random() * 0.3 + count + 0.5,
-        valor: parseFloat((valor * pct2).toFixed(2)), pessoa: appConfig.p2Name,
-        splitOf: valor, splitPct: pct2 * 100, splitPct2: null, _faturaKey: key });
-      count += 2;
-    } else {
-      const personForFatura = rowCard?.dono || currentPerson;
-      expenses.unshift({ ...baseEntry, id: Date.now() + Math.random() + count,
-        valor, pessoa: personForFatura, splitOf: null, splitPct: null, _faturaKey: key });
-      count++;
-    }
+    // Always a single entry — the person is the card owner (card.dono), never the
+    // printed titular. Couple-owned cards (dono === coupleName) stay as "Casal"; a
+    // Divisão reparte cada fatura do Casal 50/50 conforme quem pagou aquele mês
+    // (faturaPagamentos), não uma propriedade fixa do cartão.
+    const personForFatura = rowCard?.dono || currentPerson;
+    expenses.unshift({ ...baseEntry, id: Date.now() + Math.random() + count,
+      valor, pessoa: personForFatura, splitOf: null, splitPct: null, _faturaKey: key });
+    count++;
   });
 
   if (!count && !skipped) { notify('Nenhuma transação selecionada.', 'warn'); return; }
@@ -3700,7 +3864,6 @@ function renderCardsList() {
         <div class="expense-meta">
           <span class="badge" style="background:${escapeHtml(c.cor||'#344B62')}22;color:${escapeHtml(c.cor||'#344B62')}">${escapeHtml(c.tipo||'Crédito')}</span>
           <span class="badge-person" style="background:${personColor(c.dono)}22;color:${personColor(c.dono)}">${escapeHtml(c.dono||'—')}</span>
-          ${(c.divisao ?? 100) < 100 ? `<span class="badge" style="background:#ede9fe;color:#6d28d9">${c.divisao}% ${escapeHtml(c.dono)}</span>` : ''}
           ${c.titular ? `<span style="color:var(--muted)">${escapeHtml(c.titular)}</span>` : ''}
           ${c.tipo !== 'Débito' && c.diaFechamento ? `<span>Fecha ${c.diaFechamento} · Vence ${c.diaVencimento}</span>` : ''}
         </div>
@@ -3783,7 +3946,7 @@ function saveCard() {
     if (c) {
       const oldFech = c.diaFechamento, oldVenc = c.diaVencimento;
       c.nome = nome; c.final = final_; c.titular = titular; c.divisao = divisao;
-      c.tipo = tipo; c.dono = dono;
+      c.tipo = tipo; c.dono = dono; delete c.pagador;
       c.diaFechamento = fechamento; c.diaVencimento = vencimento; c.cor = cor;
       c.avisoAntecedencia = aviso; c.ativo = c.ativo ?? true;
       saveAll();
@@ -4220,6 +4383,12 @@ async function init() {
     saveAll();
   }
 
+  // Migração: remove o campo `pagador` legado dos cartões (modelo antigo, errado —
+  // o pagador da fatura do Casal varia mês a mês; agora vive em faturaPagamentos).
+  let cardsMigrated = false;
+  cards.forEach(c => { if ('pagador' in c) { delete c.pagador; cardsMigrated = true; } });
+  if (cardsMigrated) saveAll();
+
   // Migração silenciosa: preenche mesCompetencia ausente em lançamentos de crédito existentes.
   // Se diaFechamento/diaVencimento não estiverem configurados, usa o mês da compra como fallback.
   let migrated = false;
@@ -4230,6 +4399,42 @@ async function init() {
     }
   });
   if (migrated) saveAll();
+
+  // Migração (uma vez): faturas de cartão do Casal antes eram divididas em duas metades
+  // (p1 + p2) no momento da importação. No modelo atual cada gasto do Casal é UMA entry
+  // com pessoa = 'Casal' (a aba Divisão é que reparte). Reúne os pares divididos de volta
+  // numa entry única, senão eles (a) não entram na Divisão e (b) bloqueiam a reimportação
+  // pelo dedup de `_faturaKey`. Só toca entradas claramente auto-divididas (fatura+splitOf).
+  if (!appConfig.splitFaturaMerged) {
+    const groups = {};
+    expenses.forEach(e => {
+      if (e.origem === 'fatura' && e._faturaKey && e.splitOf) {
+        const card = cards.find(c => c.id === e.cardId);
+        if (card && card.dono === appConfig.coupleName) {
+          (groups[e._faturaKey] = groups[e._faturaKey] || []).push(e);
+        }
+      }
+    });
+    const keys = Object.keys(groups);
+    if (keys.length) {
+      const mergedIds = new Set();
+      keys.forEach(k => {
+        const members = groups[k];
+        const first   = members[0];
+        const card    = cards.find(c => c.id === first.cardId);
+        members.forEach(m => mergedIds.add(m.id));
+        expenses.push({ ...first,
+          id: Date.now() + Math.random(),
+          valor: Number(first.splitOf),
+          pessoa: appConfig.coupleName,
+          splitOf: null, splitPct: null, splitPct2: null });
+      });
+      expenses = expenses.filter(e => !mergedIds.has(e.id));
+    }
+    appConfig.splitFaturaMerged = true;
+    saveConfigToStorage();
+    saveAll();
+  }
 
   // Bot interno desativado — bot externo (Render) está ativo e faz o polling
   addLog('Bot externo ativo (Render). Bot interno desabilitado para evitar conflito 409.', 'info');

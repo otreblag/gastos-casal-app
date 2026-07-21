@@ -254,7 +254,10 @@ Contas sem valor fixo (água, luz, condomínio, gás, internet) são um subtipo 
 
 ## Cartões e Competência de Fatura (`cards`)
 
-Cada cartão em `cards[]`: `{ id, nome, final (4 dígitos), titular, divisao (% do dono, default 100), tipo ('Crédito'|'Débito'), dono, diaFechamento, diaVencimento, cor, avisoAntecedencia, ativo }`. CRUD via `openCardForm()` / `saveCard()` / `deleteCard()`, renderizado em `renderCardsList()` (aba Config, card "💳 Meus cartões").
+Cada cartão em `cards[]`: `{ id, nome, final (4 dígitos), titular, divisao (% do dono, default 100 — legado, não usado no cálculo), tipo ('Crédito'|'Débito'), dono, diaFechamento, diaVencimento, cor, avisoAntecedencia, ativo }`. CRUD via `openCardForm()` / `saveCard()` / `deleteCard()`, renderizado em `renderCardsList()` (aba Config, card "💳 Meus cartões"). **O cartão NÃO tem mais campo `pagador`** — quem paga a fatura do cartão do Casal varia mês a mês e vive em `faturaPagamentos[]` (ver Divisão). Migração em `init()` remove o `pagador` legado dos cartões.
+
+- **`dono`** — de quem é o gasto (`p1Name` | `p2Name` | `coupleName`). É o valor gravado em `expense.pessoa` na importação de fatura.
+- **`dono`** — de quem é o gasto. É o valor gravado em `expense.pessoa` na importação. Cartão pessoal → `pessoa` = dono (fora da Divisão); cartão do Casal (`dono === coupleName`) → `pessoa = 'Casal'` (entra na Divisão). **Quem paga a fatura não é mais propriedade do cartão** — é definido por mês em `faturaPagamentos[]` (ver "Divisão por fatura").
 
 **`calcularMesCompetencia(dataCompra, metodo, cardId)`** decide em qual mês um gasto "pesa" no orçamento:
 - Débito / Pix / Dinheiro → mês da própria compra (dinheiro já saiu da conta)
@@ -263,7 +266,7 @@ Cada cartão em `cards[]`: `{ id, nome, final (4 dígitos), titular, divisao (% 
 
 O resultado fica em `expense.mesCompetencia` (`'YYYY-MM'`). **Todo lugar que filtra despesas por mês para métricas de orçamento** (`contextMonthExpenses()`, `_calcAnnualBalance()`, evolução mensal) usa `mesCompetencia` para lançamentos de Crédito em vez de `data`. Badge `💳 a pagar <mês>` / `💳 pago` aparece em `expenseItemHTML()` quando `mesCompetencia` diverge do mês da compra.
 
-**Importação de fatura** (botão "📄 Importar fatura" na aba Lançamentos → `openInvoiceImport()`): `handleInvoiceFile()` lê um `.xls`/`.xlsx` (formato fatura C6 Bank) via SheetJS (`XLSX`, auto-hospedado em `src/vendor/xlsx.full.min.js`), extrai `Data de compra`, `Descrição`, `Valor (em R$)`, `Parcela` e `Final do Cartão`. `_renderInvoicePreview()` (modal `#invoice-modal`) detecta o cartão automaticamente pelos 4 últimos dígitos (`finalToCard`), aplica `merchantMap` (auto-correção ou sugestão) e mostra uma tabela de pré-visualização antes de confirmar a importação. Lançamentos importados recebem `origem: 'fatura'`. O card "💳 Cartão de Crédito" na aba Config guarda apenas o fechamento/vencimento *padrão* (fallback para gastos sem `cardId`) e o botão "🔄 Recalcular competências" (`recalcularCompetencias()`).
+**Importação de fatura** (botão "📄 Importar fatura" na aba Lançamentos → `openInvoiceImport()`): `handleInvoiceFile()` lê um `.xls`/`.xlsx` (formato fatura C6 Bank) via SheetJS (`XLSX`, auto-hospedado em `src/vendor/xlsx.full.min.js`), extrai `Data de compra`, `Descrição`, `Valor (em R$)`, `Parcela` e `Final do Cartão`. `_renderInvoicePreview()` (modal `#invoice-modal`) detecta o cartão automaticamente pelos 4 últimos dígitos (`finalToCard`), aplica `merchantMap` (auto-correção ou sugestão) e mostra uma tabela de pré-visualização antes de confirmar a importação. **O seletor "Cartão padrão" (`#invoice-card-select-wrap`) é apenas fallback para linhas cujo final não bate com nenhum cartão cadastrado** — quando *todas* as linhas foram detectadas (`allDetected = txCardIds.every(Boolean)`), ele é ocultado e mostra a nota `#invoice-card-alldetected` ("Todos os cartões foram detectados automaticamente"). Cada lançamento vira **uma única entry** com `pessoa = card.dono` (nunca `card.titular`) — cartões `dono === coupleName` produzem `pessoa: 'Casal'` (a Divisão é que reparte 50/50 por fatura, não a importação; o gasto não carrega `pagador`). Lançamentos importados recebem `origem: 'fatura'`. O card "💳 Cartão de Crédito" na aba Config guarda apenas o fechamento/vencimento *padrão* (fallback para gastos sem `cardId`) e o botão "🔄 Recalcular competências" (`recalcularCompetencias()`).
 
 ---
 
@@ -291,7 +294,18 @@ O gráfico de evolução (`renderEvolutionChart()` + `renderEvolutionSummary()`,
 
 ## Saldo Anual Acumulado e Acertos de Conta (`acertos`)
 
-Card "📊 Saldo anual acumulado" na aba Divisão, acima do card mensal existente. `_calcAnnualBalance(year)` é uma função pura que recalcula, mês a mês, `runningBalance += (p1Paid - p2Paid)` e aplica os acertos do mês (`de === p2 → runningBalance -= valor`; `de === p1 → runningBalance += valor`), retornando `{ rows, annualP1, annualP2, finalBalance }`. Positivo = p1 está a receber; negativo = p2 está a receber.
+**A Divisão considera SOMENTE gastos compartilhados (`pessoa === coupleName`).** Gastos pessoais (`pessoa === p1Name`/`p2Name`, de cartões pessoais como 5058/9161 ou lançamentos manuais pessoais) são 100% responsabilidade da própria pessoa e **nunca** entram no acerto entre o casal.
+
+### Divisão por fatura (`faturaPagamentos[]`)
+**Quem paga a fatura do cartão do Casal varia mês a mês** — não é propriedade fixa do cartão. Cada fatura (cartão de crédito com `dono === coupleName`, agrupada por `mesCompetencia`) tem um registro em `faturaPagamentos[]`: `{ cardId, mesCompetencia ('YYYY-MM'), formaPagamento: 'dividido'|'p1'|'p2'|'personalizado', valorGabriel, valorAnna, pago, dataPagamento, contexto }`. **Ausência de registro = `dividido`** (default → sem dívida).
+- `_faturaSplit(cardId, mes, total)` resolve quanto cada um pagou daquela fatura: `dividido`/`p1`/`p2` recalculam do total vigente; `personalizado` usa os valores salvos.
+- `_monthCouplePaid(sharedExp, mes)` agrupa os gastos Casal do mês em faturas (cartão do Casal) + gastos manuais (não-fatura, tratados como divididos) e soma `p1Paid`/`p2Paid`. A dívida é `|p1Paid − p2Paid| / 2`.
+- `_calcAnnualBalance()` e `renderDivisao()` usam `_monthCouplePaid()` — não há mais `_expensePagador`/`_cardPagador`.
+- **UI (aba Divisão, card "💳 Faturas do Casal"):** `renderFaturasDivisao()` mostra um card por fatura do Casal do mês com seletor de forma (`setFaturaForma()`), campos de valor no modo personalizado (`saveFaturaPersonalizado()`) e "Marcar como paga" (`toggleFaturaPago()`). Cada mudança grava em `faturaPagamentos` + `saveAll()` + re-render.
+- **Persistência:** `faturaPagamentos` está em todos os pontos de save/load/backup/migrateData/restore/snapshot. Chave web: `gc_faturapag`.
+- **Migração:** faturas já existentes ficam sem registro → `dividido` (zera a dívida acumulada anterior, que no modelo errado vinha do `pagador` fixo do cartão 1256). O usuário ajusta manualmente as que uma pessoa pagou sozinha.
+
+Card "📊 Saldo anual acumulado" na aba Divisão, acima do card mensal existente. `_calcAnnualBalance(year)` é uma função pura que recalcula, mês a mês, `runningBalance += (p1Paid - p2Paid)` — com `p1Paid`/`p2Paid` = gastos **Casal** adiantados por cada pessoa (ver acima) — e aplica os acertos do mês (`de === p2 → runningBalance -= valor`; `de === p1 → runningBalance += valor`), retornando `{ rows, annualP1, annualP2, finalBalance }`. Positivo = p1 está a receber; negativo = p2 está a receber.
 
 `acertos[]`: `{ id, de, para, valor, data (DD/MM/YYYY), nota, contexto, criadoEm }` — um registro de Pix que "zera" o saldo até aquele ponto. Fluxo: `openAcertoModal()` pré-calcula a direção e o valor (`Math.abs(finalBalance) / 2`) → `confirmarAcerto()` grava em `acertos[]` e chama `saveAll()` → `deleteAcerto(id)` remove. Navegação de ano via `navAnnualYear(±1)`, estado em `_annualYear` (não persistido — sempre reinicia no ano de `currentMonth`).
 

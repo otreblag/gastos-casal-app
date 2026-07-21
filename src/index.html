@@ -519,6 +519,11 @@
       <div id="balance-summary"><div class="empty"><div class="empty-icon">⚖️</div>Nenhum gasto registrado.</div></div>
     </div>
     <div class="card">
+      <div class="card-title">💳 Faturas do Casal <span id="faturas-divisao-month" style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--muted)"></span></div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.5">Quem pagou a fatura de cada cartão do Casal <strong>varia por mês</strong>. Escolha a forma de pagamento — isso define a divisão.</div>
+      <div id="faturas-divisao"><div class="empty"><div class="empty-icon">💳</div>Nenhuma fatura do Casal neste mês.</div></div>
+    </div>
+    <div class="card">
       <div class="card-title">Gastos por pessoa</div>
       <div id="person-breakdown"></div>
     </div>
@@ -687,7 +692,7 @@
         </div>
         <div class="form-row cols2" style="margin-bottom:10px">
           <div><label>Titular (nome impresso)</label><input type="text" id="card-form-titular" placeholder="Ex: GABRIEL A ALBERTO" /></div>
-          <div><label>Divisão do dono (%)</label><input type="number" id="card-form-divisao" min="1" max="100" value="100" /><div class="hint">100 = dono paga tudo · 50 = divide igualmente com a outra pessoa</div></div>
+          <div><label>Divisão do dono (%)</label><input type="number" id="card-form-divisao" min="1" max="100" value="100" /><div class="hint">Campo legado — a divisão do Casal é 50/50 na aba Divisão, definida por fatura (quem pagou cada mês).</div></div>
         </div>
         <div class="form-row cols2" style="margin-bottom:10px">
           <div><label>Tipo</label>
@@ -931,10 +936,13 @@
       <button class="modal-close" onclick="closeInvoiceModal()">✕</button>
     </div>
     <div id="invoice-summary" style="font-size:12px;color:var(--muted);margin-bottom:12px"></div>
-    <div style="margin-bottom:12px">
-      <label style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">Cartão da fatura</label>
+    <div id="invoice-card-select-wrap" style="margin-bottom:12px">
+      <label style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">Cartão padrão (linhas sem detecção)</label>
       <select id="invoice-card-select" style="margin-top:4px"></select>
-      <div class="hint">A pessoa titular do cartão será atribuída automaticamente aos lançamentos.</div>
+      <div class="hint">Usado apenas para linhas cujo cartão não foi detectado pela coluna "Final do Cartão".</div>
+    </div>
+    <div id="invoice-card-alldetected" style="display:none;margin-bottom:12px;font-size:12px;color:var(--success);background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:8px 12px">
+      ✅ Todos os cartões foram detectados automaticamente pela coluna "Final do Cartão".
     </div>
     <div style="overflow-x:auto;max-height:420px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">
       <table class="report-table" id="invoice-preview-table" style="min-width:620px">
