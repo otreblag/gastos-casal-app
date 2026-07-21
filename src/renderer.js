@@ -2577,48 +2577,67 @@ function _isManualCoupleExpense(e) {
 // manuais, e soma quanto cada um adiantou. Gastos manuais do Casal (não-fatura)
 // pagos por uma pessoa só (e.pagoPor) contam 100% para essa pessoa; sem pagoPor
 // são tratados como divididos (metade cada → sem dívida).
+//
+// Toda a soma é feita em CENTAVOS INTEIROS para eliminar o erro de ponto
+// flutuante (ex: 1300.00 saindo do reduce como 1300.0000000002, que gerava um
+// fantasma de R$ 0,01 no acumulado). Além disso, "dividido" é 50/50 EXATO: soma
+// metades idênticas aos dois lados, então NÃO gera dívida nenhuma — nem quando o
+// total tem centavo ímpar (sem o viés antigo de o centavo extra ir sempre p/ p1).
 function _monthCouplePaid(sharedExp, mesComp) {
   const p1 = appConfig.p1Name, p2 = appConfig.p2Name;
   const coupleIds = _coupleCardIds();
+  const toC = v => Math.round((Number(v) || 0) * 100); // reais → centavos inteiros
   const byCard = {};
-  let manualTotal = 0, manualP1 = 0, manualP2 = 0, manualSplit = 0;
+  let manualTotalC = 0, manualP1C = 0, manualP2C = 0, manualSplitC = 0;
   for (const e of sharedExp) {
     if (e.metodo === 'Crédito' && e.cardId && coupleIds.has(e.cardId)) {
       (byCard[e.cardId] = byCard[e.cardId] || []).push(e);
     } else {
-      manualTotal += e.valor;
-      if      (e.pagoPor === p1) manualP1 += e.valor;
-      else if (e.pagoPor === p2) manualP2 += e.valor;
-      else                       manualSplit += e.valor;
+      const v = toC(e.valor);
+      manualTotalC += v;
+      if      (e.pagoPor === p1) manualP1C += v;
+      else if (e.pagoPor === p2) manualP2C += v;
+      else                       manualSplitC += v;
     }
   }
-  let p1Paid = 0, p2Paid = 0;
+  let p1C = 0, p2C = 0; // podem carregar .5 no caso dividido (simétrico → dívida 0)
   const faturas = [];
   for (const cardId of Object.keys(byCard)) {
-    const total = byCard[cardId].reduce((s, e) => s + e.valor, 0);
+    const totalC = byCard[cardId].reduce((s, e) => s + toC(e.valor), 0);
+    const total  = totalC / 100;
     const sp = _faturaSplit(cardId, mesComp, total);
-    p1Paid += sp.valorGabriel;
-    p2Paid += sp.valorAnna;
+    if (sp.formaPagamento === 'dividido') {
+      const halfC = totalC / 2;         // 50/50 exato — metade idêntica p/ cada, sem dívida
+      p1C += halfC; p2C += halfC;
+    } else {
+      p1C += toC(sp.valorGabriel);      // p1 / p2 / personalizado — valores exatos em centavos
+      p2C += toC(sp.valorAnna);
+    }
     faturas.push({ cardId, card: cards.find(c => c.id === cardId), total, count: byCard[cardId].length, mesComp, ...sp });
   }
-  const manualHalf = manualSplit / 2;
-  p1Paid += manualP1 + manualHalf;
-  p2Paid += manualP2 + manualHalf;
-  return { p1Paid, p2Paid, faturas, manualTotal, manualP1, manualP2, manualSplit };
+  const manualHalfC = manualSplitC / 2; // pote manual dividido: metade idêntica → sem dívida
+  p1C += manualP1C + manualHalfC;
+  p2C += manualP2C + manualHalfC;
+  return {
+    p1Paid: p1C / 100, p2Paid: p2C / 100, faturas,
+    manualTotal: manualTotalC / 100, manualP1: manualP1C / 100,
+    manualP2: manualP2C / 100, manualSplit: manualSplitC / 100,
+  };
 }
 
 function _calcAnnualBalance(year) {
   const p1 = appConfig.p1Name, p2 = appConfig.p2Name;
   const months = Array.from({length: 12}, (_, i) => `${year}-${String(i+1).padStart(2,'0')}`);
   const MON_NAMES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-  let runningBalance = 0; // positive = p1 paid more (p2 owes p1), negative = p2 paid more
+  // Acumula tudo em CENTAVOS INTEIROS para não acumular erro de float mês a mês.
+  let runningC = 0; // positive = p1 paid more (p2 owes p1), negative = p2 paid more
   const rows = [], yearAcertos = acertos.filter(a => {
     if (!a.data) return false;
     if (a.contexto && a.contexto !== currentContext) return false;
     const d = a.data.includes('/') ? parseDateStr(a.data) : a.data;
     return d.startsWith(year);
   });
-  let annualP1 = 0, annualP2 = 0;
+  let annualP1C = 0, annualP2C = 0;
   for (let i = 0; i < months.length; i++) {
     const month = months[i];
     const monthExp = expenses.filter(e => {
@@ -2632,21 +2651,24 @@ function _calcAnnualBalance(year) {
     // (pessoa === p1/p2) are 100% that person's own responsibility — never split.
     const sharedExp = monthExp.filter(e => e.pessoa === appConfig.coupleName);
     const { p1Paid, p2Paid } = _monthCouplePaid(sharedExp, month);
-    const monthDiff = p1Paid - p2Paid;
-    runningBalance += monthDiff;
+    // Metades simétricas (dividido/manual) arredondam igual dos dois lados → diff 0.
+    const p1C = Math.round(p1Paid * 100), p2C = Math.round(p2Paid * 100);
+    const monthDiffC = p1C - p2C;
+    runningC += monthDiffC;
     const monthAcertos = yearAcertos.filter(a => {
       const d = a.data.includes('/') ? parseDateStr(a.data) : a.data;
       return d.startsWith(month);
     });
     for (const a of monthAcertos) {
-      if (a.de === p2) runningBalance -= a.valor;       // p2 settles debt to p1
-      else if (a.de === p1) runningBalance += a.valor;  // p1 settles debt to p2
+      const av = Math.round((Number(a.valor) || 0) * 100);
+      if (a.de === p2) runningC -= av;       // p2 settles debt to p1
+      else if (a.de === p1) runningC += av;  // p1 settles debt to p2
     }
-    annualP1 += p1Paid;
-    annualP2 += p2Paid;
-    rows.push({ month, label: MON_NAMES[i], p1Paid, p2Paid, diff: monthDiff, balance: runningBalance, acertos: monthAcertos, hasData: p1Paid > 0 || p2Paid > 0 || monthAcertos.length > 0 });
+    annualP1C += p1C;
+    annualP2C += p2C;
+    rows.push({ month, label: MON_NAMES[i], p1Paid: p1C / 100, p2Paid: p2C / 100, diff: monthDiffC / 100, balance: runningC / 100, acertos: monthAcertos, hasData: p1C > 0 || p2C > 0 || monthAcertos.length > 0 });
   }
-  return { rows, annualP1, annualP2, finalBalance: runningBalance };
+  return { rows, annualP1: annualP1C / 100, annualP2: annualP2C / 100, finalBalance: runningC / 100 };
 }
 
 function renderAnnualBalance() {
@@ -2895,10 +2917,10 @@ function renderDivisao() {
   if (!shared.length) {
     balEl.innerHTML = '<div class="empty"><div class="empty-icon">⚖️</div>Nenhum gasto do Casal neste mês.<br><span style="font-size:11px">Gastos pessoais não entram na divisão.</span></div>';
   } else {
-    const diff = p1Paid - p2Paid;
+    const diff = (Math.round(p1Paid * 100) - Math.round(p2Paid * 100)) / 100; // centavos → sem ruído de float
     let html = `<div style="display:flex;flex-direction:column;gap:8px">
       <div style="font-size:12px;color:var(--muted)">Gastos do Casal: <strong>${fmt(sharedTotal)}</strong> · Divisão igualitária: <strong>${fmt(sharedTotal/2)}</strong> cada</div>`;
-    if (Math.abs(diff) > 0.01) {
+    if (Math.abs(diff) > 0.005) {
       const debtor   = diff>0 ? escapeHtml(p2) : escapeHtml(p1);
       const creditor = diff>0 ? escapeHtml(p1) : escapeHtml(p2);
       html += `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:9px;padding:10px 14px">
