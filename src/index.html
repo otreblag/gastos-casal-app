@@ -908,7 +908,7 @@
         <div><label>Data</label><input type="date" id="edit-data" /></div>
       </div>
       <div class="form-row cols2">
-        <div><label>Quem pagou</label><select id="edit-person"></select></div>
+        <div><label>De quem é o gasto</label><select id="edit-person" onchange="_updateEditPagoPor()"></select></div>
         <div><label>Método de pagamento</label>
           <select id="edit-method" onchange="onEditMethodChange()">
             <option value="Débito">Débito</option><option value="Crédito">Crédito</option>
@@ -918,7 +918,12 @@
       </div>
       <div id="edit-card-wrap" style="display:none">
         <label>Cartão</label>
-        <select id="edit-card"></select>
+        <select id="edit-card" onchange="_updateEditPagoPor()"></select>
+      </div>
+      <div id="edit-pagopor-wrap" style="display:none">
+        <label>Quem adiantou este gasto do Casal?</label>
+        <select id="edit-pagopor"></select>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Se uma pessoa pagou sozinha, entra na divisão como dívida. "Dividido" = sem dívida.</div>
       </div>
       <div><label>Categoria</label><select id="edit-cat"></select></div>
       <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal('edit-modal')">Cancelar</button><button class="btn btn-primary" onclick="saveEdit()">💾 Salvar</button></div>

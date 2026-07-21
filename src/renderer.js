@@ -941,7 +941,29 @@ function openEdit(id) {
   ).join('');
 
   populateEditCardSelect(e.metodo, e.cardId || null);
+  _updateEditPagoPor(e.pagoPor || '');
   document.getElementById('edit-modal').classList.add('open');
+}
+
+// Mostra o seletor "quem adiantou" só para gastos manuais do Casal (não-fatura).
+// Lê o estado atual do modal (pessoa/método/cartão) para decidir a visibilidade.
+function _updateEditPagoPor(preselect) {
+  const wrap = document.getElementById('edit-pagopor-wrap');
+  const sel  = document.getElementById('edit-pagopor');
+  if (!wrap || !sel) return;
+  const pessoa = document.getElementById('edit-person')?.value;
+  const metodo = document.getElementById('edit-method')?.value;
+  const cardId = document.getElementById('edit-card')?.value || null;
+  const isManualCouple = pessoa === appConfig.coupleName &&
+    !(metodo === 'Crédito' && cardId && _coupleCardIds().has(cardId));
+  if (!isManualCouple) { wrap.style.display = 'none'; return; }
+  const cur = preselect !== undefined ? preselect : sel.value;
+  sel.innerHTML =
+    `<option value="">Dividido 50/50 (sem dívida)</option>` +
+    [appConfig.p1Name, appConfig.p2Name].map(p =>
+      `<option value="${escapeHtml(p)}" ${p === cur ? 'selected' : ''}>${escapeHtml(p)} pagou sozinho(a)</option>`
+    ).join('');
+  wrap.style.display = 'block';
 }
 
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
@@ -981,6 +1003,11 @@ function saveEdit() {
   exp.cardId = document.getElementById('edit-card')?.value || null;
   // Recalcula competência se data ou método mudaram
   exp.mesCompetencia = calcularMesCompetencia(exp.data, exp.metodo, exp.cardId);
+
+  // Pagador individual (só faz sentido em gasto manual do Casal — ver _isManualCoupleExpense).
+  // Fora desse caso, limpa o campo para não poluir gastos pessoais/fatura.
+  if (_isManualCoupleExpense(exp)) exp.pagoPor = document.getElementById('edit-pagopor')?.value || '';
+  else                             delete exp.pagoPor;
 
   // Confirm variable estimate when user explicitly changes the valor
   if (exp.isEstimate === true && Math.abs(exp.valor - origValor) > 0.001) {
@@ -1140,6 +1167,8 @@ function expenseItemHTML(e) {
   const confirmedBadge= e.isEstimate === false
     ? `<span class="badge" style="background:#dcfce7;color:#16a34a">✅ Valor real</span>` : '';
   const faturaBadge = e.origem === 'fatura' ? `<span class="badge" style="background:#dbeafe;color:#1e40af">📄 fatura</span>` : '';
+  const pagoPorBadge = (e.pagoPor && _isManualCoupleExpense(e))
+    ? `<span class="badge" style="background:#e0e7ff;color:#4338ca" title="Adiantado por ${escapeHtml(e.pagoPor)} — entra na divisão">💸 ${escapeHtml(e.pagoPor)} adiantou</span>` : '';
   const ctxBadge    = e.contexto === 'empresa' ? `<span class="badge" style="background:#e0f2fe;color:#0369a1">🏢</span>` : '';
   // Badge de competência: mostra quando a fatura ainda não venceu (dinheiro ainda não saiu da conta)
   const hoje = new Date().toISOString().slice(0, 7);
@@ -1159,7 +1188,7 @@ function expenseItemHTML(e) {
         <span class="badge-person" style="background:${pc}22;color:${pc}">${escapeHtml(e.pessoa)}</span>
         ${mi ? `<span>${mi} ${escapeHtml(cardObj ? cardObj.nome + (cardObj.final ? ' •' + cardObj.final : '') : e.metodo)}</span>` : ''}
         <span>${escapeHtml(e.data)}</span>
-        ${installBadge}${splitBadge}${fixedBadge}${estimateBadge}${confirmedBadge}${faturaBadge}${cartaoBadge}${ctxBadge}
+        ${installBadge}${splitBadge}${fixedBadge}${estimateBadge}${confirmedBadge}${faturaBadge}${pagoPorBadge}${cartaoBadge}${ctxBadge}
         ${e.confianca < 20 ? '<span style="color:#f59e0b;font-size:9px">⚠️ verifique cat.</span>' : ''}
       </div>
     </div>
@@ -2536,18 +2565,31 @@ function _faturaSplit(cardId, mesComp, total) {
   return { formaPagamento:'dividido', valorGabriel: half, valorAnna: total - half, ...base };
 }
 
+// Um gasto do Casal é "manual" (não-fatura) quando NÃO é crédito num cartão do
+// Casal — esses vivem fora do modelo de faturaPagamentos e podem ter um pagador
+// individual em e.pagoPor (p1Name | p2Name | '' = dividido).
+function _isManualCoupleExpense(e) {
+  if (!e || e.pessoa !== appConfig.coupleName) return false;
+  return !(e.metodo === 'Crédito' && e.cardId && _coupleCardIds().has(e.cardId));
+}
+
 // Agrupa os gastos do Casal de um mês em faturas (cartão do Casal) e gastos
 // manuais, e soma quanto cada um adiantou. Gastos manuais do Casal (não-fatura)
-// são tratados como divididos (metade cada → sem dívida) por padrão.
+// pagos por uma pessoa só (e.pagoPor) contam 100% para essa pessoa; sem pagoPor
+// são tratados como divididos (metade cada → sem dívida).
 function _monthCouplePaid(sharedExp, mesComp) {
+  const p1 = appConfig.p1Name, p2 = appConfig.p2Name;
   const coupleIds = _coupleCardIds();
   const byCard = {};
-  let manualTotal = 0;
+  let manualTotal = 0, manualP1 = 0, manualP2 = 0, manualSplit = 0;
   for (const e of sharedExp) {
     if (e.metodo === 'Crédito' && e.cardId && coupleIds.has(e.cardId)) {
       (byCard[e.cardId] = byCard[e.cardId] || []).push(e);
     } else {
       manualTotal += e.valor;
+      if      (e.pagoPor === p1) manualP1 += e.valor;
+      else if (e.pagoPor === p2) manualP2 += e.valor;
+      else                       manualSplit += e.valor;
     }
   }
   let p1Paid = 0, p2Paid = 0;
@@ -2559,10 +2601,10 @@ function _monthCouplePaid(sharedExp, mesComp) {
     p2Paid += sp.valorAnna;
     faturas.push({ cardId, card: cards.find(c => c.id === cardId), total, count: byCard[cardId].length, mesComp, ...sp });
   }
-  const manualHalf = manualTotal / 2;
-  p1Paid += manualHalf;
-  p2Paid += manualHalf;
-  return { p1Paid, p2Paid, faturas, manualTotal };
+  const manualHalf = manualSplit / 2;
+  p1Paid += manualP1 + manualHalf;
+  p2Paid += manualP2 + manualHalf;
+  return { p1Paid, p2Paid, faturas, manualTotal, manualP1, manualP2, manualSplit };
 }
 
 function _calcAnnualBalance(year) {
@@ -4011,6 +4053,7 @@ function onAddMethodChange() {
 function onEditMethodChange() {
   const method = document.getElementById('edit-method')?.value;
   if (method !== undefined) populateEditCardSelect(method, null);
+  _updateEditPagoPor();
 }
 
 // ─── FATURAS ──────────────────────────────────────────────────────
