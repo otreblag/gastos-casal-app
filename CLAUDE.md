@@ -363,6 +363,28 @@ O backup manual (com/sem senha) segue idêntico e independente — o automático
 
 ---
 
+## Log de Auditoria e Debug (`gastos-logs/`)
+
+Registro append-only de eventos em `<pastaDeDados>/gastos-logs/log-AAAA-MM-DD.jsonl` (formato **JSON Lines** — um evento por linha), no mesmo nível de `gastos-backups/`. Auditoria financeira (ações do usuário) + debug (erros/sistema). Funções no topo do `renderer.js` (constantes `LOG_DIR_NAME`, `LOG_RETENTION_DAYS = 90`).
+
+**Formato de cada linha:** `{ timestamp (ISO), tipo, categoria, acao, ator, detalhes?, antes?, depois? }`.
+- `tipo`: `acao_usuario` | `sistema` | `erro`.
+- `categoria`: `lancamento` | `config` | `sync` | `backup` | `fatura` | `cartao` | `divisao` | `atualizacao` | `sistema`.
+- `ator`: pessoa do lançamento (`p1Name`/`p2Name`/`Casal`) quando aplicável — o app **não tem login**, então é o melhor sinal disponível — ou `'Sistema'`/`'Bot'`/`'Usuário'`.
+- `antes`/`depois`: snapshot compacto (`_expLogSnapshot`) — `antes` em editar/excluir, `depois` em criar/editar.
+
+**`auditLog(entry)`** — fire-and-forget, **nunca lança nem trava a UI**. Serializa os appends numa fila (`_logQueue`) para não intercalar escritas concorrentes. Grava via IPC `append-file` (`window.electronAPI.appendFile`, com allowlist de caminho no `main.js` — a pasta de dados é raiz permitida). Modo web (sem Electron) não loga (limitação conhecida, igual aos snapshots).
+
+**Nunca grava segredos:** `_scrubDeep(val)` percorre `detalhes`/`antes`/`depois` recursivamente, aplica `scrubSecrets()` em strings e substitui por `***` qualquer chave que bata em `SECRET_CONFIG_KEYS` ou no regex `token|secret|senha|password|pass`.
+
+**Eventos logados** — auditoria: criação de lançamento (`addExpenseObj` manual, `syncFromSheets` bot com `ator:'Bot'`, `confirmInvoiceImport` resumo da fatura com itens/cartões/total/meses), edição (`saveEdit`, com antes/depois), exclusão (`deleteExpense`/`deleteAcerto`, com o dado preservado em `antes`), divisão (`setFaturaForma`/`saveFaturaPersonalizado`/`toggleFaturaPago`), acerto (`confirmarAcerto`), cartões (`saveCard` criar/editar, `deleteCard`), restauração (`executeRestore`). Sistema/debug: erro de sync (`syncFromSheets` catch + registros descartados), erro de importação de fatura (`handleInvoiceFile` catch), erro de escrita (`saveAll`), snapshot automático (`_autoSnapshot` sucesso/erro), e auto-update (`main.js` → bridge `sendAudit` → IPC `audit-log` → `window.electronAPI.onAuditLog(auditLog)`, registrado no `init()`).
+
+**Retenção:** `_pruneOldLogs(dir)` apaga `log-*.jsonl` com mais de `LOG_RETENTION_DAYS` (90) dias — janela maior que os snapshots (30) por ser log, não backup de dados. Roda 1×/dia (gate `_logsPrunedDay`), disparado no primeiro append do dia.
+
+**UI:** menu **Arquivo → "Abrir pasta de logs"** (`main.js` → `openLogsFolder()`, mesmo padrão do "Abrir pasta de dados"; cria a pasta se não existir).
+
+---
+
 ## Estrutura das Abas
 
 ### Header (`.header`, fora das abas)

@@ -16,9 +16,11 @@ let manualUpdateCheck = false;
 
 autoUpdater.on('update-available', (info) => {
   console.log(`[updater] Atualização disponível: v${info.version}`);
+  sendAudit({ tipo: 'sistema', categoria: 'atualizacao', acao: 'disponivel', ator: 'Sistema', detalhes: { versao: info && info.version } });
 });
 
 autoUpdater.on('update-not-available', () => {
+  sendAudit({ tipo: 'sistema', categoria: 'atualizacao', acao: 'verificar', ator: 'Sistema', detalhes: { resultado: 'ja-atualizado', versaoAtual: app.getVersion() } });
   if (manualUpdateCheck && win) {
     dialog.showMessageBox(win, {
       type: 'info',
@@ -31,6 +33,7 @@ autoUpdater.on('update-not-available', () => {
 
 autoUpdater.on('update-downloaded', (info) => {
   manualUpdateCheck = false;
+  sendAudit({ tipo: 'sistema', categoria: 'atualizacao', acao: 'baixada', ator: 'Sistema', detalhes: { versao: info && info.version } });
   if (!win) return;
   dialog.showMessageBox(win, {
     type: 'info',
@@ -52,6 +55,7 @@ autoUpdater.on('update-downloaded', (info) => {
 
 autoUpdater.on('error', (err) => {
   console.error('[updater] Erro ao verificar/baixar atualização:', err == null ? 'desconhecido' : (err.stack || err).toString());
+  sendAudit({ tipo: 'erro', categoria: 'atualizacao', acao: 'erro', ator: 'Sistema', detalhes: { mensagem: err == null ? 'desconhecido' : (err.message || String(err)) } });
   if (manualUpdateCheck && win) {
     dialog.showMessageBox(win, {
       type: 'error',
@@ -196,6 +200,23 @@ ipcMain.handle('delete-file', (_event, filePath) => {
   try { fs.unlinkSync(filePath); return true; } catch { return false; }
 });
 
+// Acrescenta uma linha a um arquivo (usado pelo log de auditoria JSONL). Faz
+// mkdir do diretório e só opera em caminhos permitidos. Retorna bool.
+ipcMain.handle('append-file', (_event, filePath, content) => {
+  if (!_isPathAllowed(filePath)) { console.warn('[ipc] append-file negado — fora da allowlist'); return false; }
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.appendFileSync(filePath, content, 'utf8');
+    return true;
+  } catch { return false; }
+});
+
+// Bridge de auditoria: eventos que só o main conhece (auto-update) são enviados
+// ao renderer, que os grava no log JSONL via auditLog(). Nunca contém segredos.
+function sendAudit(entry) {
+  try { if (win && !win.isDestroyed()) win.webContents.send('audit-log', entry); } catch {}
+}
+
 // ─── SECRETS (safeStorage) ───────────────────────────────────────
 // Criptografa/descriptografa segredos (token do bot, secret do Sheets) com a
 // chave do SO (DPAPI no Windows). Retorna { available, value }:
@@ -319,6 +340,7 @@ function createWindow() {
   const menu = Menu.buildFromTemplate([
     { label: 'Arquivo', submenu: [
       { label: 'Abrir pasta de dados', click: openDataFolder },
+      { label: 'Abrir pasta de logs', click: openLogsFolder },
       { type: 'separator' },
       { label: 'Verificar atualizações', click: () => checkForUpdates(true) },
       { type: 'separator' },
@@ -372,6 +394,19 @@ function openDataFolder() {
         const { shell } = require('electron');
         shell.openPath(path.dirname(dataPath));
       }
+    }).catch(() => {});
+}
+
+// Abre <pastaDeDados>/gastos-logs no explorador (mesmo padrão do "Abrir pasta de
+// dados"). Cria a pasta se ainda não existir para não abrir num caminho vazio.
+function openLogsFolder() {
+  win.webContents.executeJavaScript('window.__getDataPath && window.__getDataPath()')
+    .then(dataPath => {
+      if (!dataPath) return;
+      const { shell } = require('electron');
+      const dir = path.join(path.dirname(dataPath), 'gastos-logs');
+      try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+      shell.openPath(dir);
     }).catch(() => {});
 }
 

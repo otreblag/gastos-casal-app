@@ -90,7 +90,10 @@ async function _autoSnapshot() {
     const file = await window.electronAPI.pathJoin(dir, `gastos-${_snapshotStamp()}.json`);
     await window.electronAPI.writeFile(file, content); // writeFile faz mkdir do dir
     await _pruneOldSnapshots(dir);
-  } catch { /* não-fatal: o gastos.json principal já foi salvo */ }
+    auditLog({ tipo: 'sistema', categoria: 'backup', acao: 'snapshot', ator: 'Sistema', detalhes: { arquivo: `gastos-${_snapshotStamp()}.json`, lancamentos: expenses.length } });
+  } catch (e) {
+    auditLog({ tipo: 'erro', categoria: 'backup', acao: 'snapshot-erro', ator: 'Sistema', detalhes: { mensagem: String(e && e.message || e) } });
+  }
 }
 
 // Cria um snapshot AGORA, ignorando o gate 1x/dia — usado antes de operações
@@ -122,6 +125,96 @@ async function _pruneOldSnapshots(dir) {
       await window.electronAPI.deleteFile(p);
     }
   }
+}
+
+// ─── LOG DE AUDITORIA (JSONL) ─────────────────────────────────────
+// Grava um evento por linha em <pastaDeDados>/gastos-logs/log-AAAA-MM-DD.jsonl.
+// Auditoria financeira (ações do usuário) + debug (erros/sistema). Fire-and-forget,
+// serializado numa fila (_logQueue) para não intercalar escritas concorrentes.
+// Nunca grava segredos: _scrubDeep mascara strings e apaga chaves de token/secret.
+// Retenção: LOG_RETENTION_DAYS dias (prune 1x/dia). "ator" = pessoa do lançamento
+// quando aplicável (o app não tem login) ou 'Sistema'/'Bot'.
+const LOG_DIR_NAME       = 'gastos-logs';
+const LOG_RETENTION_DAYS = 90;
+let _logQueue        = Promise.resolve(); // serializa os appends
+let _logsPrunedDay   = '';                // gate do prune (1x/dia)
+
+async function _logsDir() {
+  const base = appConfig.dataFolderPath || (await window.electronAPI.getDefaultDataPath());
+  return window.electronAPI.pathJoin(base, LOG_DIR_NAME);
+}
+
+// Remove recursivamente qualquer valor sensível antes de gravar: scrubSecrets em
+// strings + apaga chaves conhecidas de credencial (token/secret/senha/password).
+function _scrubDeep(val, depth = 0) {
+  if (depth > 6) return '[…]';
+  if (typeof val === 'string') return scrubSecrets(val);
+  if (Array.isArray(val)) return val.slice(0, 200).map(v => _scrubDeep(v, depth + 1));
+  if (val && typeof val === 'object') {
+    const out = {};
+    for (const k of Object.keys(val)) {
+      if ((typeof SECRET_CONFIG_KEYS !== 'undefined' && SECRET_CONFIG_KEYS.includes(k)) ||
+          /token|secret|senha|password|pass/i.test(k)) { out[k] = '***'; continue; }
+      out[k] = _scrubDeep(val[k], depth + 1);
+    }
+    return out;
+  }
+  return val;
+}
+
+// Registra um evento de auditoria/debug. Fire-and-forget — nunca lança nem trava a
+// UI. entry: { tipo, categoria, acao, ator?, detalhes?, antes?, depois? }.
+function auditLog(entry) {
+  try {
+    if (!isElectron() || !entry) return; // modo web: sem FS (limitação conhecida)
+    const rec = {
+      timestamp: new Date().toISOString(),
+      tipo:      entry.tipo      || 'sistema',
+      categoria: entry.categoria || 'sistema',
+      acao:      entry.acao      || 'evento',
+      ator:      entry.ator      || 'Sistema',
+    };
+    if (entry.detalhes !== undefined) rec.detalhes = _scrubDeep(entry.detalhes);
+    if (entry.antes    !== undefined) rec.antes    = _scrubDeep(entry.antes);
+    if (entry.depois   !== undefined) rec.depois   = _scrubDeep(entry.depois);
+    const line = JSON.stringify(rec) + '\n';
+    const day  = rec.timestamp.slice(0, 10);
+    _logQueue = _logQueue.then(async () => {
+      const dir  = await _logsDir();
+      const file = await window.electronAPI.pathJoin(dir, `log-${day}.jsonl`);
+      await window.electronAPI.appendFile(file, line);
+      if (_logsPrunedDay !== day) { _logsPrunedDay = day; await _pruneOldLogs(dir); }
+    }).catch(() => {});
+  } catch { /* nunca propaga */ }
+}
+
+// Snapshot compacto de um lançamento para os campos antes/depois do log.
+function _expLogSnapshot(e) {
+  if (!e) return null;
+  return {
+    id: e.id, descricao: e.descricao, valor: e.valor, categoria: e.categoria,
+    pessoa: e.pessoa, data: e.data, metodo: e.metodo || '', cardId: e.cardId || null,
+    mesCompetencia: e.mesCompetencia, origem: e.origem || 'manual',
+    ...(e.pagoPor ? { pagoPor: e.pagoPor } : {}),
+  };
+}
+
+// Apaga logs com mais de LOG_RETENTION_DAYS dias (data no nome do arquivo).
+async function _pruneOldLogs(dir) {
+  try {
+    const list = await window.electronAPI.listDir(dir);
+    if (!Array.isArray(list)) return;
+    const cutoff = Date.now() - LOG_RETENTION_DAYS * 86400000;
+    for (const f of list) {
+      const m = f.name.match(/^log-(\d{4})-(\d{2})-(\d{2})\.jsonl$/i);
+      if (!m) continue;
+      const t = new Date(+m[1], +m[2] - 1, +m[3]).getTime();
+      if (t < cutoff) {
+        const p = await window.electronAPI.pathJoin(dir, f.name);
+        await window.electronAPI.deleteFile(p);
+      }
+    }
+  } catch { /* não-fatal */ }
 }
 
 const _snapStampOf = n => ((n.match(/(\d{4})-(\d{2})-(\d{2})-(\d{2})h(\d{2})/) || []).slice(1).join('')) || '';
@@ -289,7 +382,7 @@ async function saveAll() {
   if (isElectron()) {
     const filePath = await resolveDataFilePath();
     const ok = await window.electronAPI.writeFile(filePath, JSON.stringify(data, null, 2));
-    if (!ok) notify('Erro ao salvar arquivo de dados!', 'err');
+    if (!ok) { notify('Erro ao salvar arquivo de dados!', 'err'); auditLog({ tipo: 'erro', categoria: 'sistema', acao: 'escrita-arquivo', ator: 'Sistema', detalhes: { arquivo: 'gastos.json' } }); }
     _autoSnapshot(); // snapshot automático 1x/dia (não bloqueia o save)
   } else {
     try {
@@ -892,7 +985,7 @@ function addExpenseObj({ descricao, valor, categoria, categoriaId, icone, cor, p
   mensagem  = sanitizeText(mensagem, VALIDATION.msgMax);
   const now    = new Date();
   const dataBR = now.toLocaleDateString('pt-BR');
-  expenses.unshift({
+  const novo = {
     id: Date.now() + Math.random(),
     descricao, valor: valorSan,
     categoria, categoriaId, icone, cor,
@@ -903,14 +996,18 @@ function addExpenseObj({ descricao, valor, categoria, categoriaId, icone, cor, p
     mesCompetencia: calcularMesCompetencia(dataBR, metodo || '', cardId || null),
     installment: installment || null, splitOf: splitOf || null, splitPct: splitPct || null,
     fixedId: fixedId || null, contexto: currentContext,
-  });
+  };
+  expenses.unshift(novo);
+  auditLog({ tipo: 'acao_usuario', categoria: 'lancamento', acao: 'criar', ator: novo.pessoa || 'Usuário', detalhes: { origem: fixedId ? 'fixa' : 'manual' }, depois: _expLogSnapshot(novo) });
   saveAll(); updateMetrics(); renderFaturas(); renderRecent(); renderList(); renderBudgetAlerts();
 }
 
 function deleteExpense(id) {
   if (!confirm('Remover este lançamento?')) return;
+  const alvo = expenses.find(e => e.id === id);
   deletedExpenseIds.add(String(id));
   expenses = expenses.filter(e => e.id !== id);
+  auditLog({ tipo: 'acao_usuario', categoria: 'lancamento', acao: 'excluir', ator: alvo?.pessoa || 'Usuário', detalhes: { id }, antes: _expLogSnapshot(alvo) });
   saveAll(); updateMetrics(); renderFaturas(); renderRecent(); renderList(); renderCharts(); renderBudgetAlerts();
   notify('Removido.', 'info');
 }
@@ -990,6 +1087,7 @@ function saveEdit() {
   const origDesc        = exp.descricao;
   const origCatId       = exp.categoriaId;
   const origValor       = exp.valor;
+  const _antesEdit      = _expLogSnapshot(exp); // para o log de auditoria (antes/depois)
 
   const catId  = document.getElementById('edit-cat').value;
   const catObj = getAllCategories().find(c => c.id === catId);
@@ -1021,6 +1119,7 @@ function saveEdit() {
     }
   }
 
+  auditLog({ tipo: 'acao_usuario', categoria: 'lancamento', acao: 'editar', ator: exp.pessoa || 'Usuário', detalhes: { id: exp.id }, antes: _antesEdit, depois: _expLogSnapshot(exp) });
   saveAll(); updateMetrics(); renderFaturas(); renderRecent(); renderList(); renderCharts(); renderBudgetAlerts();
   closeModal('edit-modal');
   notify('Lançamento atualizado!', 'ok');
@@ -1974,6 +2073,7 @@ async function executeRestore() {
   }
 
   await saveAll();
+  auditLog({ tipo: 'acao_usuario', categoria: 'backup', acao: 'restaurar', ator: 'Usuário', detalhes: { lancamentos: expenses.length, cartoes: cards.length, acertos: acertos.length, origem: data && data.backupDate ? 'backup' : 'snapshot' } });
 
   loadConfig();
   await hydrateSecrets();
@@ -2789,7 +2889,9 @@ function confirmarAcerto() {
   const nota  = document.getElementById('acerto-nota').value.trim();
   if (!valor || !dataISO) { notify('Preencha valor e data.', 'err'); return; }
   const dataBR = dataISO.split('-').reverse().join('/');
-  acertos.push({ id: String(Date.now() + Math.random()), de, para, valor, data: dataBR, nota, contexto: currentContext, criadoEm: new Date().toISOString() });
+  const acerto = { id: String(Date.now() + Math.random()), de, para, valor, data: dataBR, nota, contexto: currentContext, criadoEm: new Date().toISOString() };
+  acertos.push(acerto);
+  auditLog({ tipo: 'acao_usuario', categoria: 'divisao', acao: 'acerto', ator: de, detalhes: { de, para, valor, data: dataBR, nota } });
   saveAll();
   document.getElementById('acerto-modal').classList.remove('open');
   renderAnnualBalance();
@@ -2797,7 +2899,9 @@ function confirmarAcerto() {
 }
 
 function deleteAcerto(id) {
+  const alvo = acertos.find(a => String(a.id) === String(id));
   acertos = acertos.filter(a => String(a.id) !== String(id));
+  auditLog({ tipo: 'acao_usuario', categoria: 'divisao', acao: 'acerto-excluir', ator: alvo?.de || 'Usuário', antes: alvo ? { de: alvo.de, para: alvo.para, valor: alvo.valor, data: alvo.data } : null });
   saveAll();
   renderAnnualBalance();
 }
@@ -2816,6 +2920,7 @@ function _getOrCreateFaturaPag(cardId, mesComp) {
 
 function setFaturaForma(cardId, mesComp, forma) {
   const rec = _getOrCreateFaturaPag(cardId, mesComp);
+  const formaAntes = rec.formaPagamento;
   rec.formaPagamento = forma;
   if (forma === 'personalizado' && !(rec.valorGabriel || rec.valorAnna)) {
     const shared = contextMonthExpenses().filter(e => e.pessoa === appConfig.coupleName);
@@ -2823,6 +2928,8 @@ function setFaturaForma(cardId, mesComp, forma) {
     const half = f ? Math.round((f.total/2)*100)/100 : 0;
     rec.valorGabriel = half; rec.valorAnna = f ? f.total - half : 0;
   }
+  const card = cards.find(c => c.id === cardId);
+  auditLog({ tipo: 'acao_usuario', categoria: 'divisao', acao: 'forma-pagamento', ator: 'Usuário', detalhes: { cartao: card?.nome || cardId, mesCompetencia: mesComp }, antes: { formaPagamento: formaAntes }, depois: { formaPagamento: forma } });
   saveAll();
   renderDivisao();
 }
@@ -2832,6 +2939,8 @@ function saveFaturaPersonalizado(cardId, mesComp) {
   rec.formaPagamento = 'personalizado';
   rec.valorGabriel = parseCurrencyInput(document.getElementById('fat-vg-' + cardId)?.value);
   rec.valorAnna    = parseCurrencyInput(document.getElementById('fat-va-' + cardId)?.value);
+  const card = cards.find(c => c.id === cardId);
+  auditLog({ tipo: 'acao_usuario', categoria: 'divisao', acao: 'valores-personalizados', ator: 'Usuário', detalhes: { cartao: card?.nome || cardId, mesCompetencia: mesComp }, depois: { valorGabriel: rec.valorGabriel, valorAnna: rec.valorAnna } });
   saveAll();
   renderDivisao();
   notify('Valores da fatura salvos.', 'ok');
@@ -2841,6 +2950,8 @@ function toggleFaturaPago(cardId, mesComp) {
   const rec = _getOrCreateFaturaPag(cardId, mesComp);
   rec.pago = !rec.pago;
   rec.dataPagamento = rec.pago ? new Date().toLocaleDateString('pt-BR') : '';
+  const card = cards.find(c => c.id === cardId);
+  auditLog({ tipo: 'acao_usuario', categoria: 'divisao', acao: rec.pago ? 'fatura-paga' : 'fatura-nao-paga', ator: 'Usuário', detalhes: { cartao: card?.nome || cardId, mesCompetencia: mesComp, dataPagamento: rec.dataPagamento } });
   saveAll();
   renderDivisao();
 }
@@ -3336,7 +3447,7 @@ async function syncFromSheets() {
       // Data invalida/absurda -> cai para hoje (nao descarta o gasto por causa da data).
       const dataSan = sanitizeDateBR(g.data) || new Date().toLocaleDateString('pt-BR');
       // Converte formato do Sheets para formato do app
-      expenses.unshift({
+      const gSync = {
         id:          g.id,
         descricao:   sanitizeText(g.descricao, VALIDATION.descMax),
         valor:       valorSan,
@@ -3351,10 +3462,15 @@ async function syncFromSheets() {
         data:        dataSan,
         ts:          parseInt(g.id) || Date.now(),
         splitOf:     null, splitPct: null, installment: null,
-      });
+      };
+      expenses.unshift(gSync);
+      auditLog({ tipo: 'acao_usuario', categoria: 'lancamento', acao: 'criar', ator: 'Bot', detalhes: { origem: 'telegram' }, depois: _expLogSnapshot({ ...gSync, origem: 'telegram' }) });
       added++;
     }
-    if (dropped > 0) console.warn(`[sync] ${dropped} registro(s) descartado(s) por falha de validacao.`);
+    if (dropped > 0) {
+      console.warn(`[sync] ${dropped} registro(s) descartado(s) por falha de validacao.`);
+      auditLog({ tipo: 'erro', categoria: 'sync', acao: 'registros-descartados', ator: 'Sistema', detalhes: { quantidade: dropped } });
+    }
 
     if (added > 0) {
       appConfig.sheetsLastSync = Date.now();
@@ -3370,6 +3486,7 @@ async function syncFromSheets() {
 
   } catch(e) {
     console.error('Erro ao sincronizar do Sheets:', scrubSecrets(e.message));
+    auditLog({ tipo: 'erro', categoria: 'sync', acao: 'erro', ator: 'Sistema', detalhes: { mensagem: scrubSecrets(String(e && e.message || e)) } });
   }
 }
 
@@ -3556,6 +3673,7 @@ function _readInvoiceBuffer(buffer, password) {
     _renderInvoicePreview(transactions);
   } catch(err) {
     console.error('[fatura] Falha ao processar o arquivo:', err && err.message);
+    auditLog({ tipo: 'erro', categoria: 'fatura', acao: 'importar-erro', ator: 'Sistema', detalhes: { mensagem: String(err && err.message || err) } });
     notify('Não foi possível interpretar a fatura. Verifique se é uma fatura C6 Bank válida (.xls/.xlsx).', 'err');
   }
 }
@@ -3797,7 +3915,8 @@ function confirmInvoiceImport() {
   const defaultInvoiceCardId = invoiceCardSel?.value || null;
 
   const rows = document.querySelectorAll('#invoice-rows tr[data-idx]');
-  let count = 0, skipped = 0;
+  let count = 0, skipped = 0, _impTotal = 0;
+  const _impCards      = new Set();
   const newMonthTally  = {};
   const fileMonthTally = {};
 
@@ -3877,6 +3996,8 @@ function confirmInvoiceImport() {
     expenses.unshift({ ...baseEntry, id: Date.now() + Math.random() + count,
       valor, pessoa: personForFatura, splitOf: null, splitPct: null, _faturaKey: key });
     count++;
+    _impTotal += valor;
+    if (rowCard) _impCards.add(rowCard.nome + (rowCard.final ? ' •' + rowCard.final : ''));
   });
 
   if (!count && !skipped) { notify('Nenhuma transação selecionada.', 'warn'); return; }
@@ -3897,6 +4018,7 @@ function confirmInvoiceImport() {
     return;
   }
 
+  auditLog({ tipo: 'acao_usuario', categoria: 'fatura', acao: 'importar', ator: 'Usuário', detalhes: { itens: count, duplicadosIgnorados: skipped, total: Math.round(_impTotal * 100) / 100, cartoes: [..._impCards], meses: newMonthTally } });
   saveAll(); updateMetrics(); renderRecent(); renderList(); renderBudgetAlerts();
 
   const breakdown = Object.entries(newMonthTally)
@@ -4005,19 +4127,24 @@ function saveCard() {
     notify('Configure dia de fechamento e vencimento para cartão de crédito.', 'err'); return;
   }
   const cor = _selectedCardColor || CARD_COLORS[0];
+  const _cardLog = c => ({ nome: c.nome, final: c.final, tipo: c.tipo, dono: c.dono, diaFechamento: c.diaFechamento, diaVencimento: c.diaVencimento });
   if (_editingCardId) {
     const c = cards.find(x => x.id === _editingCardId);
     if (c) {
+      const antesCard = _cardLog(c);
       const oldFech = c.diaFechamento, oldVenc = c.diaVencimento;
       c.nome = nome; c.final = final_; c.titular = titular; c.divisao = divisao;
       c.tipo = tipo; c.dono = dono; delete c.pagador;
       c.diaFechamento = fechamento; c.diaVencimento = vencimento; c.cor = cor;
       c.avisoAntecedencia = aviso; c.ativo = c.ativo ?? true;
+      auditLog({ tipo: 'acao_usuario', categoria: 'cartao', acao: 'editar', ator: 'Usuário', detalhes: { id: c.id }, antes: antesCard, depois: _cardLog(c) });
       saveAll();
       if (oldFech !== fechamento || oldVenc !== vencimento) recalcularCompetencias(_editingCardId);
     }
   } else {
-    cards.push({ id: 'card_' + Date.now(), nome, final: final_, titular, divisao, tipo, dono, diaFechamento: fechamento, diaVencimento: vencimento, cor, avisoAntecedencia: aviso, ativo: true });
+    const novoCard = { id: 'card_' + Date.now(), nome, final: final_, titular, divisao, tipo, dono, diaFechamento: fechamento, diaVencimento: vencimento, cor, avisoAntecedencia: aviso, ativo: true };
+    cards.push(novoCard);
+    auditLog({ tipo: 'acao_usuario', categoria: 'cartao', acao: 'criar', ator: 'Usuário', detalhes: { id: novoCard.id }, depois: _cardLog(novoCard) });
     saveAll();
   }
   closeCardForm();
@@ -4027,7 +4154,9 @@ function saveCard() {
 
 function deleteCard(id) {
   if (!confirm('Remover este cartão? Os lançamentos associados não serão afetados.')) return;
+  const alvo = cards.find(c => c.id === id);
   cards = cards.filter(c => c.id !== id);
+  auditLog({ tipo: 'acao_usuario', categoria: 'cartao', acao: 'excluir', ator: 'Usuário', detalhes: { id }, antes: alvo ? { nome: alvo.nome, final: alvo.final, tipo: alvo.tipo, dono: alvo.dono } : null });
   saveAll();
   renderCardsList();
   notify('Cartão removido.', 'info');
@@ -4396,6 +4525,8 @@ async function init() {
   await hydrateSecrets();
   setupCurrencyInputs();
   renderAppVersionInfo();
+  // Bridge de auditoria: recebe eventos do main (auto-update) e grava no log JSONL.
+  try { window.electronAPI.onAuditLog && window.electronAPI.onAuditLog(auditLog); } catch {}
   appConfig.botWasRunning = false; // bot externo (Render) é o único autorizado
   startSheetsSync(); // start syncing from Google Sheets
   buildMonthSelector();

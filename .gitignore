@@ -9,6 +9,9 @@ gastos-recuperado*.json
 *.backup.json
 finannza-backup-*.json
 *backup*.json
+gastos-backups/
+gastos-logs/
+log-*.jsonl
 
 # Segredos — nunca versionar
 .env

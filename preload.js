@@ -18,5 +18,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   backupOpen:         (bundle, pass)     => ipcRenderer.invoke('backup-open', bundle, pass),
   listDir:            (dirPath)          => ipcRenderer.invoke('list-dir', dirPath),
   deleteFile:         (filePath)         => ipcRenderer.invoke('delete-file', filePath),
+  appendFile:         (filePath, content) => ipcRenderer.invoke('append-file', filePath, content),
   registerDataFolder: (folderPath)       => ipcRenderer.invoke('register-data-folder', folderPath),
+  onAuditLog:         (cb)               => ipcRenderer.on('audit-log', (_e, entry) => { try { cb(entry); } catch {} }),
 });
