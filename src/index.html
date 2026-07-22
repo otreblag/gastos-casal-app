@@ -676,6 +676,19 @@
       </div>
     </div>
 
+    <!-- Versão mobile (somente leitura) -->
+    <div class="card">
+      <div class="card-title">📱 Versão mobile (somente leitura)</div>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">
+        Publica um resumo consolidado na sua planilha do Google para consulta pelo navegador do celular — <strong>somente leitura</strong>, sem editar nada. Atualiza sozinho ao salvar (no máx. 1×/5min) e por este botão. Nenhum token ou segredo vai no resumo.
+      </p>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <span id="mobile-publish-status" style="font-size:11px;color:var(--muted)">Nunca publicado</span>
+        <button class="btn btn-secondary" onclick="publicarSnapshotMobile(true)">📱 Atualizar versão mobile</button>
+      </div>
+      <div class="hint" style="margin-top:8px">Requer a URL e o token do Apps Script (card acima) configurados. Página de acesso no celular: veja o README (GitHub Pages).</div>
+    </div>
+
     <!-- Meus cartões -->
     <div class="card">
       <div class="card-title">💳 Meus cartões

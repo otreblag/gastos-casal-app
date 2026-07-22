@@ -55,6 +55,7 @@ const DEFAULT_CONFIG = {
   dismissedInvoiceAlerts: [], // alertKeys dispensados: ["cardId-YYYY-MM", ...]
   lastBackupDate: 0,          // timestamp Unix do último backup exportado
   lastAutoSnapshot: '',       // 'YYYY-MM-DD' do último snapshot automático (gate 1x/dia)
+  lastMobilePublish: 0,       // timestamp Unix da última publicação da versão mobile
 };
 
 // ─── SNAPSHOTS AUTOMÁTICOS ────────────────────────────────────────
@@ -384,6 +385,7 @@ async function saveAll() {
     const ok = await window.electronAPI.writeFile(filePath, JSON.stringify(data, null, 2));
     if (!ok) { notify('Erro ao salvar arquivo de dados!', 'err'); auditLog({ tipo: 'erro', categoria: 'sistema', acao: 'escrita-arquivo', ator: 'Sistema', detalhes: { arquivo: 'gastos.json' } }); }
     _autoSnapshot(); // snapshot automático 1x/dia (não bloqueia o save)
+    _scheduleMobilePublish(); // publica versão mobile (debounced, máx 1x/5min)
   } else {
     try {
       localStorage.setItem('gc_expenses',    JSON.stringify(expenses));
@@ -748,7 +750,7 @@ function switchTab(name) {
   if (name === 'fixas')       { populateFixedCatSelect(); populateFixedPersonSelect(); renderFixedList(); }
   if (name === 'divisao')     renderDivisao();
   if (name === 'relatorios')  { initReportDates(); renderEvolutionChart(); }
-  if (name === 'config')      { renderCfgForm(); renderAutoBackups(); }
+  if (name === 'config')      { renderCfgForm(); renderAutoBackups(); renderMobilePublishStatus(); }
 }
 
 function onMonthChange() {
@@ -3495,6 +3497,132 @@ function startSheetsSync() {
   if (!appConfig.appsScriptUrl) return;
   syncFromSheets(); // sync imediato ao iniciar
   _syncInterval = setInterval(syncFromSheets, 30000); // a cada 30s
+}
+
+// ─── VERSÃO MOBILE (somente leitura) ──────────────────────────────
+// Publica um snapshot consolidado (só leitura) na planilha do Google via Apps
+// Script, para consulta pelo navegador do celular. NUNCA inclui token/segredo.
+// Contém: expenses do ano corrente (enxutos), cartões, faturaPagamentos, e os
+// totais já calculados (por mês, categoria, pessoa) + saldo da divisão.
+let _mobilePublishTimer = null;
+const MOBILE_PUBLISH_MIN_MS = 5 * 60 * 1000; // no máx. 1 publicação a cada 5 min
+
+// Mês efetivo de um gasto (mesma regra do desktop: Crédito → vencimento; senão data).
+function _mesEfetivo(e) {
+  if (!e || !e.data) return '';
+  return (e.metodo === 'Crédito' && e.mesCompetencia)
+    ? e.mesCompetencia
+    : (e.data.includes('/') ? parseDateStr(e.data) : e.data).slice(0, 7);
+}
+
+// Monta o snapshot consolidado do ano corrente (contexto pessoal). Função pura —
+// não faz rede. O saldo da divisão é calculado com currentContext='pessoal'.
+function _buildMobileSnapshot() {
+  const year = String(new Date().getFullYear());
+  const prevCtx = currentContext;
+  let divisao;
+  try { currentContext = 'pessoal'; divisao = _calcAnnualBalance(year); }
+  finally { currentContext = prevCtx; }
+
+  // Gastos pessoais do ano (exclui contexto empresa). Campos enxutos — sem
+  // mensagem (texto livre do Telegram, desnecessário) nem campos internos.
+  const yearExp = expenses.filter(e => {
+    const m = _mesEfetivo(e);
+    return m.startsWith(year) && (!e.contexto || e.contexto === 'pessoal');
+  });
+  const exp = yearExp.map(e => ({
+    id: e.id, descricao: e.descricao, valor: e.valor,
+    categoria: e.categoria, categoriaId: e.categoriaId, icone: e.icone, cor: e.cor,
+    pessoa: e.pessoa, data: e.data, metodo: e.metodo || '', cardId: e.cardId || null,
+    mes: _mesEfetivo(e), origem: e.origem || 'manual',
+    ...(e.installment ? { installment: { current: e.installment.current, total: e.installment.total } } : {}),
+  }));
+
+  // Resumo por mês: total, contagem, por categoria, por pessoa.
+  const resumoMeses = {};
+  for (const e of exp) {
+    const r = resumoMeses[e.mes] || (resumoMeses[e.mes] = { total: 0, count: 0, porCategoria: {}, porPessoa: {} });
+    r.total += e.valor; r.count++;
+    r.porCategoria[e.categoria] = (r.porCategoria[e.categoria] || 0) + e.valor;
+    r.porPessoa[e.pessoa]       = (r.porPessoa[e.pessoa]       || 0) + e.valor;
+  }
+  // Arredonda os totais em centavos (evita ruído de float na exibição mobile).
+  const r2 = v => Math.round(v * 100) / 100;
+  for (const m of Object.keys(resumoMeses)) {
+    const r = resumoMeses[m]; r.total = r2(r.total);
+    for (const k of Object.keys(r.porCategoria)) r.porCategoria[k] = r2(r.porCategoria[k]);
+    for (const k of Object.keys(r.porPessoa))    r.porPessoa[k]    = r2(r.porPessoa[k]);
+  }
+
+  // Divisão por mês (do ano) a partir do cálculo anual já feito.
+  const divisaoMeses = {};
+  for (const row of divisao.rows) {
+    if (!row.hasData) continue;
+    divisaoMeses[row.month] = { p1Paid: r2(row.p1Paid), p2Paid: r2(row.p2Paid), diff: r2(row.diff), saldoAcumulado: r2(row.balance) };
+  }
+
+  return {
+    versao: 1,
+    geradoEm: new Date().toISOString(),
+    ano: year,
+    config: { p1Name: appConfig.p1Name, p2Name: appConfig.p2Name, coupleName: appConfig.coupleName },
+    cards: cards.map(c => ({ id: c.id, nome: c.nome, final: c.final || '', dono: c.dono, tipo: c.tipo, cor: c.cor })),
+    faturaPagamentos: faturaPagamentos.map(f => ({ cardId: f.cardId, mesCompetencia: f.mesCompetencia, formaPagamento: f.formaPagamento, pago: !!f.pago })),
+    expenses: exp,
+    resumoMeses,
+    divisaoMeses,
+    divisaoAnual: { annualP1: r2(divisao.annualP1), annualP2: r2(divisao.annualP2), finalBalance: r2(divisao.finalBalance) },
+  };
+}
+
+// Publica o snapshot no Apps Script. manual=true mostra notificações de feedback.
+async function publicarSnapshotMobile(manual = false) {
+  if (!isElectron()) { if (manual) notify('Disponível apenas no app instalado.', 'warn'); return; }
+  const url = appConfig.appsScriptUrl, secret = appConfig.sheetsSecret;
+  if (!url || !secret) { if (manual) notify('Configure a URL e o token do Apps Script primeiro.', 'warn'); return; }
+  let snapshot;
+  try { snapshot = _buildMobileSnapshot(); }
+  catch (e) { if (manual) notify('Erro ao montar o resumo mobile.', 'err'); return; }
+  try {
+    // POST com Content-Type text/plain: evita o preflight CORS (requisição simples).
+    // O Apps Script lê e.postData.contents independente do content-type.
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ secret, acao: 'publicar_snapshot', snapshot }),
+    });
+    const data = await resp.json();
+    if (data && data.ok) {
+      appConfig.lastMobilePublish = Date.now();
+      saveConfigToStorage();
+      renderMobilePublishStatus();
+      auditLog({ tipo: 'sistema', categoria: 'sync', acao: 'publicar-mobile', ator: manual ? 'Usuário' : 'Sistema', detalhes: { itens: snapshot.expenses.length, chars: data.chars, pedacos: data.chunks } });
+      if (manual) notify('Versão mobile atualizada! 📱', 'ok');
+    } else {
+      auditLog({ tipo: 'erro', categoria: 'sync', acao: 'publicar-mobile-erro', ator: 'Sistema', detalhes: { erro: scrubSecrets(String(data && data.erro || 'desconhecido')) } });
+      if (manual) notify('Falha ao publicar: ' + (data && data.erro || 'erro desconhecido'), 'err');
+    }
+  } catch (e) {
+    auditLog({ tipo: 'erro', categoria: 'sync', acao: 'publicar-mobile-erro', ator: 'Sistema', detalhes: { mensagem: scrubSecrets(String(e && e.message || e)) } });
+    if (manual) notify('Erro de rede ao publicar a versão mobile.', 'err');
+  }
+}
+
+// Agenda a publicação automática (debounced): no máx. 1×/5min. Chamado por saveAll.
+// Coalesce múltiplos saves numa única publicação. Só age se url+secret configurados.
+function _scheduleMobilePublish() {
+  if (!isElectron() || !appConfig.appsScriptUrl || !appConfig.sheetsSecret) return;
+  if (_mobilePublishTimer) return; // já há uma publicação agendada — coalesce
+  const since = Date.now() - (appConfig.lastMobilePublish || 0);
+  const wait  = Math.max(0, MOBILE_PUBLISH_MIN_MS - since);
+  _mobilePublishTimer = setTimeout(() => { _mobilePublishTimer = null; publicarSnapshotMobile(false); }, wait);
+}
+
+function renderMobilePublishStatus() {
+  const el = document.getElementById('mobile-publish-status');
+  if (!el) return;
+  const t = appConfig.lastMobilePublish;
+  el.textContent = t ? `Última publicação: ${new Date(t).toLocaleString('pt-BR')}` : 'Nunca publicado';
 }
 
 // Placeholder — será substituído pela secret real do usuário

@@ -385,6 +385,28 @@ Registro append-only de eventos em `<pastaDeDados>/gastos-logs/log-AAAA-MM-DD.js
 
 ---
 
+## Versão Mobile (somente leitura) — `mobile/` + snapshot no Sheets
+
+Página web **somente leitura** (`mobile/index.html`) para consultar os gastos pelo navegador do celular, **mesmo com o PC desligado**. Arquitetura: o app do PC publica um snapshot consolidado na planilha do Google (via Apps Script); a página mobile (GitHub Pages) lê de lá. **Não edita nada** — sem botões de criar/editar/excluir.
+
+### Publicação (app Electron — `renderer.js`)
+- **`_buildMobileSnapshot()`** (função pura) monta o snapshot do **ano corrente, contexto pessoal**: `expenses` enxutos (sem `mensagem` nem campos internos; cada um com `mes` = mês efetivo via `_mesEfetivo`), `cards` (id/nome/final/dono/tipo/cor), `faturaPagamentos` (só forma/pago), `resumoMeses` (`{ 'YYYY-MM': { total, count, porCategoria, porPessoa } }`, tudo arredondado em centavos), `divisaoMeses` (do `_calcAnnualBalance`, com `currentContext='pessoal'` forçado durante o cálculo) e `divisaoAnual`. **Nunca inclui token/segredo.**
+- **`publicarSnapshotMobile(manual)`** — POST ao Apps Script com `{ secret, acao:'publicar_snapshot', snapshot }`. Usa `Content-Type: text/plain;charset=utf-8` (evita o preflight CORS — requisição simples; o Apps Script lê `e.postData.contents` de qualquer jeito). `manual=true` mostra notificações. Grava `appConfig.lastMobilePublish` e loga auditoria.
+- **Gatilhos:** (a) automático em `saveAll()` via `_scheduleMobilePublish()` — debounced, **no máx. 1×/5min** (`MOBILE_PUBLISH_MIN_MS`), coalescendo saves; só age se `appsScriptUrl`+`sheetsSecret` configurados; (b) botão **"📱 Atualizar versão mobile"** na aba Config (card "📱 Versão mobile"). Status em `renderMobilePublishStatus()` (chamado em `switchTab('config')`).
+
+### Apps Script (`apps-script.gs` — repo do bot)
+- **`doPost` → `publicar_snapshot`**: `publicarSnapshot(snapshot)` grava o JSON na aba **`Snapshot`**, dividido em pedaços de `SNAPSHOT_CHUNK` (45k) chars ao longo da coluna A (contorna o limite de 50k/célula); B1 = data/hora, C1 = nº de pedaços.
+- **`doGet` (novo, consolidado)**: valida `SECRET_TOKEN` **antes** de tudo; `?acao=ler_snapshot` → `lerSnapshot()` (junta os pedaços da coluna A); `?acao=listar` → `listarGastos()` (o sync do desktop — reconstruído aqui a partir da aba Gastos). **Se a implantação tiver um `doGet` legado em outro arquivo, remova-o** — este consolida os dois. Republicar = editar a implantação existente (Nova versão), nunca criar nova (mudaria a URL).
+
+### Página mobile (`mobile/`)
+Single-file HTML self-contained (CSS+JS inline), **sem CDN** — fontes Inter/IBM Plex Mono vendorizadas em `mobile/fonts/` (mesmo padrão do desktop). Mesma paleta/tipografia e tema claro/escuro (`prefers-color-scheme` + toggle com `data-theme`).
+- **Tela de acesso:** pede URL do Apps Script + token na 1ª visita, guarda no `localStorage` (`fz_mobile_url`/`fz_mobile_secret`); valida a URL (`https://script.google.com/`) e o token (fetch de teste). Sem token válido, **nada é exibido**.
+- **Abas (nav inferior):** Painel (total do mês, donut por categoria em **SVG puro** — sem libs, por pessoa em barras, últimos 5), Extrato (lista do mês + busca + pills de categoria/pessoa), Divisão (acerto do mês + saldo do ano mês a mês). Seletor de mês (‹ ›) navega pelos meses do snapshot.
+- **Offline:** cacheia o último snapshot no `localStorage` (`fz_mobile_snapshot`); se o fetch falhar, usa o cache e mostra a data + `(offline)` no topo. Botão ⟳ atualiza; ⚙️ reabre a tela de acesso.
+- **GitHub Pages:** servido de `main`/`root`; URL `https://otreblag.github.io/gastos-casal-app/mobile/`. `.nojekyll` na raiz. **`mobile/_*.json` está no `.gitignore`** (o fixture de desenvolvimento `_sample-snapshot.json` contém dados reais e nunca deve ser commitado).
+
+---
+
 ## Estrutura das Abas
 
 ### Header (`.header`, fora das abas)

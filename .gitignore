@@ -12,6 +12,8 @@ finannza-backup-*.json
 gastos-backups/
 gastos-logs/
 log-*.jsonl
+mobile/_*.json
+_sample-snapshot.json
 
 # Segredos — nunca versionar
 .env
