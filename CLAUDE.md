@@ -769,3 +769,5 @@ Versão lida via IPC (`getAppVersion()` → `app.getVersion()`), nunca hardcoded
 | **1.0.0** | 07-08 | Commit inicial: app Electron de controle financeiro do casal, com auto-update (`electron-updater` + GitHub Releases). ⚠️ Release **draft** (mesmo bug). |
 
 > Notas: v1.0.0 e v1.1.0 permanecem como **draft** no GitHub (superseded, invisíveis ao `electron-updater`) — não republicar. A cadeia de auto-update efetiva começa na v1.1.1. Ao publicar uma nova versão, adicione a linha correspondente aqui.
+>
+> **v1.3.0 publicada em 2026-10-01** (tag `v1.3.0`, `draft:false` confirmado pela listagem pública da API). Assets presentes: `Finannza-Setup-1.3.0.exe` (≈74,7 MB), `Finannza-Setup-1.3.0.exe.blockmap` e `latest.yml` (com `version: 1.3.0` → `path: Finannza-Setup-1.3.0.exe`). Cadeia de auto-update íntegra. Código em `main` no commit `7e4439e`.
