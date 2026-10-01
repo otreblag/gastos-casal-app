@@ -8,6 +8,19 @@ let win  = null;
 let tray = null;
 let isQuitting = false;
 
+// Após QUALQUER diálogo nativo (showMessageBox/showMessageBoxSync/showOpenDialog/
+// showSaveDialog), o Electron no Windows pode deixar o renderer sem foco de teclado:
+// os inputs da janela param de aceitar digitação até a janela perder e recuperar o
+// foco manualmente. Devolver o foco à janela + webContents logo após o diálogo evita
+// esse travamento (o mesmo bug que levou os window.confirm() do renderer a virarem
+// um modal próprio). Chamar após cada diálogo nativo deste processo.
+function restoreWindowFocus() {
+  if (win && !win.isDestroyed()) {
+    win.focus();
+    win.webContents.focus();
+  }
+}
+
 // ─── AUTO UPDATE (electron-updater + GitHub Releases) ─────────────
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
@@ -26,7 +39,7 @@ autoUpdater.on('update-not-available', () => {
       type: 'info',
       title: 'Verificar atualizações',
       message: 'Você já está usando a versão mais recente do Finannza.',
-    });
+    }).then(restoreWindowFocus);
   }
   manualUpdateCheck = false;
 });
@@ -44,6 +57,7 @@ autoUpdater.on('update-downloaded', (info) => {
     defaultId: 0,
     cancelId: 1,
   }).then(({ response }) => {
+    restoreWindowFocus();
     if (response === 0) {
       isQuitting = true;
       if (tray) { tray.destroy(); tray = null; }
@@ -62,7 +76,7 @@ autoUpdater.on('error', (err) => {
       title: 'Verificar atualizações',
       message: 'Não foi possível verificar atualizações.',
       detail: err == null ? 'Erro desconhecido.' : (err.message || err.toString()),
-    });
+    }).then(restoreWindowFocus);
   }
   manualUpdateCheck = false;
 });
@@ -76,7 +90,7 @@ function checkForUpdates(manual = false) {
         title: 'Verificar atualizações',
         message: 'Verificação de atualizações indisponível em modo de desenvolvimento.',
         detail: 'Isso só funciona no aplicativo instalado (.exe), não ao rodar via "npm start".',
-      });
+      }).then(restoreWindowFocus);
     }
     return;
   }
@@ -89,7 +103,7 @@ function checkForUpdates(manual = false) {
         title: 'Verificar atualizações',
         message: 'Não foi possível verificar atualizações.',
         detail: err.message || err.toString(),
-      });
+      }).then(restoreWindowFocus);
     }
     manualUpdateCheck = false;
   });
@@ -146,6 +160,7 @@ ipcMain.handle('register-data-folder', (_event, folderPath) => {
 
 ipcMain.handle('select-folder', async () => {
   const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
+  restoreWindowFocus();
   if (result.canceled) return null;
   _addAllowedRoot(result.filePaths[0]); // pasta escolhida pelo usuário → permitida
   return result.filePaths[0];
@@ -166,6 +181,7 @@ ipcMain.handle('file-exists', (_event, filePath) => {
 
 ipcMain.handle('save-file-dialog', async (_event, options) => {
   const result = await dialog.showSaveDialog(win, options);
+  restoreWindowFocus();
   if (result.canceled) return null;
   _allowedFiles.add(path.resolve(result.filePath)); // arquivo escolhido → permitido
   return result.filePath;
@@ -173,6 +189,7 @@ ipcMain.handle('save-file-dialog', async (_event, options) => {
 
 ipcMain.handle('open-file-dialog', async (_event, options) => {
   const result = await dialog.showOpenDialog(win, { ...options, properties: ['openFile'] });
+  restoreWindowFocus();
   if (result.canceled) return null;
   _allowedFiles.add(path.resolve(result.filePaths[0])); // arquivo escolhido → permitido
   return result.filePaths[0];
@@ -469,6 +486,7 @@ function maybeImportOrphanData() {
       message: `Encontramos dados de uma instalação anterior (${legacyName}) com ${legacyCount} lançamento${plural}. Deseja importá-los agora?`,
       detail: 'Os dados serão copiados para a pasta atual do Finannza. Como seus dados atuais estão vazios, nada será perdido.',
     });
+    restoreWindowFocus();
 
     if (choice === 0) {
       try {
@@ -479,6 +497,7 @@ function maybeImportOrphanData() {
           title: 'Importação concluída',
           message: `${legacyCount} lançamento${plural} importado${plural} com sucesso da instalação anterior.`,
         });
+        restoreWindowFocus();
       } catch (copyErr) {
         console.error('[migração] Falha ao copiar gastos.json anterior:', copyErr.message);
         dialog.showMessageBoxSync({
@@ -487,6 +506,7 @@ function maybeImportOrphanData() {
           message: 'Não foi possível copiar os dados da instalação anterior.',
           detail: copyErr.message,
         });
+        restoreWindowFocus();
         return; // não grava marcador — permite tentar de novo no próximo boot
       }
     }

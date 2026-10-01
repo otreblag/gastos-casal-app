@@ -583,7 +583,7 @@ async function changeDataFolder() {
   const exists  = await window.electronAPI.fileExists(newPath);
 
   if (exists) {
-    const load = confirm(`Encontrado gastos.json em:\n${folder}\n\nCarregar os dados deste arquivo? (substitui os dados atuais)`);
+    const load = await confirmModal(`Encontrado gastos.json em:\n${folder}\n\nCarregar os dados deste arquivo? (substitui os dados atuais)`, { title: 'Carregar dados da pasta?', okText: 'Carregar' });
     if (load) {
       appConfig.dataFolderPath = folder;
       dataFilePath = newPath;
@@ -1004,8 +1004,8 @@ function addExpenseObj({ descricao, valor, categoria, categoriaId, icone, cor, p
   saveAll(); updateMetrics(); renderFaturas(); renderRecent(); renderList(); renderBudgetAlerts();
 }
 
-function deleteExpense(id) {
-  if (!confirm('Remover este lançamento?')) return;
+async function deleteExpense(id) {
+  if (!(await confirmModal('Remover este lançamento?', { title: 'Remover lançamento', okText: 'Remover', danger: true }))) return;
   const alvo = expenses.find(e => e.id === id);
   deletedExpenseIds.add(String(id));
   expenses = expenses.filter(e => e.id !== id);
@@ -1066,6 +1066,39 @@ function _updateEditPagoPor(preselect) {
 }
 
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+// ─── MODAL DE CONFIRMAÇÃO PRÓPRIO ─────────────────────────────────
+// Substitui window.confirm() nativo em todo o app. O confirm() nativo no
+// Electron/Windows dispara um bug de foco: após fechá-lo, os inputs da janela
+// param de aceitar digitação até a janela perder e recuperar o foco. Este modal
+// é 100% HTML/DOM, então não tem esse efeito. Retorna uma Promise<boolean>.
+let _confirmResolve = null;
+function confirmModal(message, opts = {}) {
+  const { title = 'Confirmar', okText = 'Confirmar', cancelText = 'Cancelar', danger = false } = opts;
+  return new Promise(resolve => {
+    // Se já houver um modal aberto (uso aninhado), resolve o anterior como falso.
+    if (_confirmResolve) { const prev = _confirmResolve; _confirmResolve = null; prev(false); }
+    _confirmResolve = resolve;
+    document.getElementById('confirm-modal-title').textContent = title;
+    document.getElementById('confirm-modal-msg').textContent   = message;
+    const okBtn = document.getElementById('confirm-modal-ok');
+    okBtn.textContent = okText;
+    okBtn.className   = 'btn ' + (danger ? 'btn-danger' : 'btn-primary');
+    document.getElementById('confirm-modal-cancel').textContent = cancelText;
+    document.getElementById('confirm-modal').classList.add('open');
+    document.addEventListener('keydown', _confirmKeydown);
+    setTimeout(() => okBtn.focus(), 30);
+  });
+}
+function _confirmKeydown(e) {
+  if (e.key === 'Escape') { e.preventDefault(); _confirmModalResolve(false); }
+}
+function _confirmModalResolve(val) {
+  document.getElementById('confirm-modal').classList.remove('open');
+  document.removeEventListener('keydown', _confirmKeydown);
+  const r = _confirmResolve; _confirmResolve = null;
+  if (r) r(val);
+}
 
 function openAddModal() {
   renderPersonPills();
@@ -1287,7 +1320,7 @@ function expenseItemHTML(e) {
       <div class="expense-meta">
         <span class="badge" style="background:${escapeHtml(e.cor||'#eee')}22;color:${escapeHtml(e.cor||'#888')}">${escapeHtml(e.categoria)}</span>
         <span class="badge-person" style="background:${pc}22;color:${pc}">${escapeHtml(e.pessoa)}</span>
-        ${mi ? `<span>${mi} ${escapeHtml(cardObj ? cardObj.nome + (cardObj.final ? ' •' + cardObj.final : '') : e.metodo)}</span>` : ''}
+        ${mi ? `<span>${mi} ${escapeHtml(cardObj ? ((cardObj.banco || cardObj.nome) + (cardObj.final ? ' •' + cardObj.final : '')) : e.metodo)}</span>` : ''}
         <span>${escapeHtml(e.data)}</span>
         ${installBadge}${splitBadge}${fixedBadge}${estimateBadge}${confirmedBadge}${faturaBadge}${pagoPorBadge}${cartaoBadge}${ctxBadge}
         ${e.confianca < 20 ? '<span style="color:#f59e0b;font-size:9px">⚠️ verifique cat.</span>' : ''}
@@ -1433,8 +1466,11 @@ function _renderSortButtons() {
 function populateListCardSelect() {
   const sel = document.getElementById('filter-card-sel');
   if (!sel) return;
+  // Filtro de lançamentos: inclui arquivados (filtros/relatórios olham o histórico),
+  // apenas rotulando-os — ativos primeiro, depois arquivados.
+  const ordered = [...cards].sort((a, b) => (a.ativo === false) - (b.ativo === false));
   sel.innerHTML = `<option value="">Todos os cartões</option>` +
-    cards.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.nome)}${c.final?' •'+escapeHtml(c.final):''} (${escapeHtml(c.dono)})</option>`).join('');
+    ordered.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.nome)}${c.final?' •'+escapeHtml(c.final):''} (${escapeHtml(c.dono)})${c.ativo===false?' — arquivado':''}</option>`).join('');
   sel.value = _listFilters.cardId || '';
 }
 
@@ -1916,7 +1952,7 @@ async function _verifyAndProcess(wrapper) {
       checksumOk = (await _sha256Subtle(payloadStr)) === wrapper.checksum;
     }
   }
-  if (!checksumOk && !confirm('⚠️ A verificação de integridade falhou — o arquivo pode ter sido corrompido ou alterado depois de exportado.\n\nDeseja restaurar mesmo assim?')) return;
+  if (!checksumOk && !(await confirmModal('⚠️ A verificação de integridade falhou — o arquivo pode ter sido corrompido ou alterado depois de exportado.\n\nDeseja restaurar mesmo assim?', { title: 'Integridade do backup', okText: 'Restaurar assim mesmo', danger: true }))) return;
   _processImport(wrapper.payload);
 }
 
@@ -1932,7 +1968,7 @@ async function _decryptAndProcess(password) {
   catch { if (msg) msg.textContent = 'Conteúdo inválido após descriptografar.'; return; }
   _pendingEncryptedBundle = null;
   _closeBackupPassModal();
-  if (!res.checksumOk && !confirm('⚠️ A verificação de integridade falhou após descriptografar. Restaurar mesmo assim?')) return;
+  if (!res.checksumOk && !(await confirmModal('⚠️ A verificação de integridade falhou após descriptografar. Restaurar mesmo assim?', { title: 'Integridade do backup', okText: 'Restaurar assim mesmo', danger: true }))) return;
   _processImport(payload);
 }
 
@@ -2494,8 +2530,8 @@ function toggleFixedActive(id) {
   saveAll(); renderFixedList();
 }
 
-function deleteFixed(id) {
-  if (!confirm('Remover esta despesa fixa?')) return;
+async function deleteFixed(id) {
+  if (!(await confirmModal('Remover esta despesa fixa?', { title: 'Remover despesa fixa', okText: 'Remover', danger: true }))) return;
   fixedExpenses = fixedExpenses.filter(f=>f.id!==id);
   saveAll(); renderFixedList();
   notify('Despesa fixa removida.','info');
@@ -3300,8 +3336,8 @@ function createCategory() {
   notify(`"${name}" criada!`,'ok');
 }
 
-function deleteCategory(id) {
-  if (!confirm('Excluir esta categoria?')) return;
+async function deleteCategory(id) {
+  if (!(await confirmModal('Excluir esta categoria?', { title: 'Excluir categoria', okText: 'Excluir', danger: true }))) return;
   customCats=customCats.filter(c=>c.id!==id);
   saveAll(); renderCatGrid();
   notify('Categoria excluída.','info');
@@ -3566,7 +3602,7 @@ function _buildMobileSnapshot() {
     geradoEm: new Date().toISOString(),
     ano: year,
     config: { p1Name: appConfig.p1Name, p2Name: appConfig.p2Name, coupleName: appConfig.coupleName },
-    cards: cards.map(c => ({ id: c.id, nome: c.nome, final: c.final || '', dono: c.dono, tipo: c.tipo, cor: c.cor })),
+    cards: cards.map(c => ({ id: c.id, nome: c.nome, final: c.final || '', banco: c.banco || '', apelido: c.apelido || '', dono: c.dono, tipo: c.tipo, cor: c.cor, ativo: c.ativo !== false })),
     faturaPagamentos: faturaPagamentos.map(f => ({ cardId: f.cardId, mesCompetencia: f.mesCompetencia, formaPagamento: f.formaPagamento, pago: !!f.pago })),
     expenses: exp,
     resumoMeses,
@@ -3870,9 +3906,10 @@ function _renderInvoicePreview(transactions) {
   const allCats = getAllCategories();
   populateInvoiceCardSelect();
 
-  // Map card final digits → card object for auto-detection
+  // Map card final digits → card object for auto-detection (só cartões ativos; os
+  // arquivados não são detectados na importação — linha cai no seletor de fallback).
   const finalToCard = {};
-  cards.forEach(c => { if (c.final) finalToCard[c.final] = c; });
+  cards.forEach(c => { if (c.final && c.ativo !== false) finalToCard[c.final] = c; });
 
   // Compute per-row card from finalCartao column
   const txCardIds = transactions.map(t =>
@@ -4170,23 +4207,52 @@ function renderCardsList() {
     container.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">Nenhum cartão cadastrado.</div>';
     return;
   }
-  container.innerHTML = cards.map(c => `
-    <div class="expense-item" style="padding:10px 12px">
+  const ativos     = cards.filter(c => c.ativo !== false);
+  const arquivados = cards.filter(c => c.ativo === false);
+  const secTitle = t => `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:4px 0 6px">${t}</div>`;
+
+  let html = '';
+  html += secTitle(`Ativos (${ativos.length})`);
+  html += ativos.length
+    ? ativos.map(c => _cardItemHTML(c, false)).join('')
+    : `<div style="color:var(--muted);font-size:12px;padding:4px 0 2px">Nenhum cartão ativo. Adicione um novo ou reative um arquivado.</div>`;
+
+  if (arquivados.length) {
+    html += `<details style="margin-top:12px">
+      <summary style="cursor:pointer;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:4px 0;list-style:revert">Arquivados (${arquivados.length})</summary>
+      <div style="margin-top:6px">${arquivados.map(c => _cardItemHTML(c, true)).join('')}</div>
+    </details>`;
+  }
+  container.innerHTML = html;
+}
+
+function _cardItemHTML(c, archived) {
+  const link = _cardLinkCount(c.id);
+  const deletable = link.total === 0;
+  const delBtn = deletable
+    ? `<button class="btn-icon" onclick="deleteCard('${escapeHtml(c.id)}')" title="Excluir definitivamente">🗑</button>` : '';
+  const actions = archived
+    ? `<button class="btn-icon" onclick="openCardForm('${escapeHtml(c.id)}')" title="Editar">✏️</button>
+       <button class="btn-icon" onclick="reactivateCard('${escapeHtml(c.id)}')" title="Reativar">♻️</button>${delBtn}`
+    : `<button class="btn-icon" onclick="openCardForm('${escapeHtml(c.id)}')" title="Editar">✏️</button>
+       <button class="btn-icon" onclick="archiveCard('${escapeHtml(c.id)}')" title="Arquivar">🗃</button>${delBtn}`;
+  return `
+    <div class="expense-item" style="padding:10px 12px${archived ? ';opacity:.72' : ''}">
       <div class="expense-icon" style="background:${escapeHtml(c.cor||'#344B62')}22">💳</div>
       <div class="expense-main">
-        <div class="expense-desc">${escapeHtml(c.nome)}${c.final ? `<span style="font-family:monospace;color:var(--muted);font-size:11px;margin-left:5px">•${escapeHtml(c.final)}</span>` : ''}</div>
+        <div class="expense-desc">${escapeHtml(c.nome)}${c.final ? `<span style="font-family:monospace;color:var(--muted);font-size:11px;margin-left:5px">•${escapeHtml(c.final)}</span>` : ''}${archived ? ` <span class="badge" style="background:var(--faint);color:var(--muted)">arquivado</span>` : ''}</div>
         <div class="expense-meta">
+          ${c.banco ? `<span class="badge" style="background:var(--faint);color:var(--muted)">${escapeHtml(c.banco)}</span>` : ''}
           <span class="badge" style="background:${escapeHtml(c.cor||'#344B62')}22;color:${escapeHtml(c.cor||'#344B62')}">${escapeHtml(c.tipo||'Crédito')}</span>
           <span class="badge-person" style="background:${personColor(c.dono)}22;color:${personColor(c.dono)}">${escapeHtml(c.dono||'—')}</span>
+          ${c.apelido ? `<span style="color:var(--muted)">@${escapeHtml(c.apelido)}</span>` : ''}
           ${c.titular ? `<span style="color:var(--muted)">${escapeHtml(c.titular)}</span>` : ''}
           ${c.tipo !== 'Débito' && c.diaFechamento ? `<span>Fecha ${c.diaFechamento} · Vence ${c.diaVencimento}</span>` : ''}
+          ${link.total ? `<span style="color:var(--muted)">${link.expenses} lanç.</span>` : ''}
         </div>
       </div>
-      <div class="expense-actions">
-        <button class="btn-icon" onclick="openCardForm('${escapeHtml(c.id)}')" title="Editar">✏️</button>
-        <button class="btn-icon" onclick="deleteCard('${escapeHtml(c.id)}')" title="Remover">🗑</button>
-      </div>
-    </div>`).join('');
+      <div class="expense-actions">${actions}</div>
+    </div>`;
 }
 
 let _editingCardId      = null;
@@ -4195,10 +4261,11 @@ let _selectedCardColor  = CARD_COLORS[0];
 function openCardForm(cardId) {
   _editingCardId = cardId || null;
   const card = cardId ? cards.find(c => c.id === cardId) : null;
+  document.getElementById('card-form-banco').value      = card?.banco   || '';
   document.getElementById('card-form-nome').value       = card?.nome    || '';
   document.getElementById('card-form-final').value      = card?.final   || '';
+  document.getElementById('card-form-apelido').value    = card?.apelido || '';
   document.getElementById('card-form-titular').value    = card?.titular || '';
-  document.getElementById('card-form-divisao').value    = card?.divisao ?? 100;
   document.getElementById('card-form-tipo').value       = card?.tipo    || 'Crédito';
   document.getElementById('card-form-fechamento').value = card?.diaFechamento || '';
   document.getElementById('card-form-vencimento').value = card?.diaVencimento || '';
@@ -4243,34 +4310,49 @@ function onCardTipoChange() {
 function saveCard() {
   const nome = document.getElementById('card-form-nome').value.trim();
   if (!nome) { notify('Digite o nome do cartão.', 'err'); return; }
+  const banco      = document.getElementById('card-form-banco').value;
+  const apelido    = document.getElementById('card-form-apelido')?.value.trim() || '';
   const tipo       = document.getElementById('card-form-tipo').value;
   const dono       = document.getElementById('card-form-dono').value;
-  const final_     = (document.getElementById('card-form-final')?.value || '').replace(/\D/g, '').slice(-4);
+  const finalDig   = (document.getElementById('card-form-final')?.value || '').replace(/\D/g, '');
   const titular    = document.getElementById('card-form-titular')?.value.trim() || '';
-  const divisao    = Math.min(100, Math.max(1, parseInt(document.getElementById('card-form-divisao')?.value) || 100));
-  const fechamento = parseInt(document.getElementById('card-form-fechamento').value) || 0;
-  const vencimento = parseInt(document.getElementById('card-form-vencimento').value) || 0;
+  const fechRaw    = (document.getElementById('card-form-fechamento').value || '').trim();
+  const vencRaw    = (document.getElementById('card-form-vencimento').value || '').trim();
+  const fechamento = fechRaw === '' ? 0 : parseInt(fechRaw);
+  const vencimento = vencRaw === '' ? 0 : parseInt(vencRaw);
   const aviso      = Math.max(1, parseInt(document.getElementById('card-form-aviso').value) || 5);
+
+  // Validações
+  if (finalDig.length !== 4) { notify('O final do cartão deve ter 4 dígitos numéricos.', 'err'); return; }
+  if (fechRaw !== '' && (fechamento < 1 || fechamento > 31)) { notify('Dia de fechamento deve estar entre 1 e 31.', 'err'); return; }
+  if (vencRaw !== '' && (vencimento < 1 || vencimento > 31)) { notify('Dia de vencimento deve estar entre 1 e 31.', 'err'); return; }
+  // Não permitir dois cartões ATIVOS com o mesmo banco + final (arquivados não contam).
+  const dupe = cards.find(c => c.id !== _editingCardId && c.ativo !== false &&
+    (c.banco || '') === banco && String(c.final || '') === finalDig);
+  if (dupe) { notify(`Já existe um cartão ativo ${banco || 'sem banco'} •${finalDig} ("${dupe.nome}").`, 'err'); return; }
+  // Aviso (não bloqueia): crédito sem fechamento/vencimento → a competência cai no mês da compra.
   if (tipo !== 'Débito' && (!fechamento || !vencimento)) {
-    notify('Configure dia de fechamento e vencimento para cartão de crédito.', 'err'); return;
+    notify('Sem dia de fechamento/vencimento, os gastos no crédito entram no mês da compra.', 'warn');
   }
+
   const cor = _selectedCardColor || CARD_COLORS[0];
-  const _cardLog = c => ({ nome: c.nome, final: c.final, tipo: c.tipo, dono: c.dono, diaFechamento: c.diaFechamento, diaVencimento: c.diaVencimento });
+  const _cardLog = c => ({ nome: c.nome, banco: c.banco, final: c.final, tipo: c.tipo, dono: c.dono, diaFechamento: c.diaFechamento, diaVencimento: c.diaVencimento });
   if (_editingCardId) {
     const c = cards.find(x => x.id === _editingCardId);
     if (c) {
       const antesCard = _cardLog(c);
       const oldFech = c.diaFechamento, oldVenc = c.diaVencimento;
-      c.nome = nome; c.final = final_; c.titular = titular; c.divisao = divisao;
+      c.nome = nome; c.banco = banco; c.apelido = apelido; c.final = finalDig; c.titular = titular;
       c.tipo = tipo; c.dono = dono; delete c.pagador;
       c.diaFechamento = fechamento; c.diaVencimento = vencimento; c.cor = cor;
       c.avisoAntecedencia = aviso; c.ativo = c.ativo ?? true;
+      // c.divisao: campo legado — preservado como está (não é mais editável na UI).
       auditLog({ tipo: 'acao_usuario', categoria: 'cartao', acao: 'editar', ator: 'Usuário', detalhes: { id: c.id }, antes: antesCard, depois: _cardLog(c) });
       saveAll();
       if (oldFech !== fechamento || oldVenc !== vencimento) recalcularCompetencias(_editingCardId);
     }
   } else {
-    const novoCard = { id: 'card_' + Date.now(), nome, final: final_, titular, divisao, tipo, dono, diaFechamento: fechamento, diaVencimento: vencimento, cor, avisoAntecedencia: aviso, ativo: true };
+    const novoCard = { id: 'card_' + Date.now(), nome, banco, apelido, final: finalDig, titular, divisao: 100, tipo, dono, diaFechamento: fechamento, diaVencimento: vencimento, cor, avisoAntecedencia: aviso, ativo: true };
     cards.push(novoCard);
     auditLog({ tipo: 'acao_usuario', categoria: 'cartao', acao: 'criar', ator: 'Usuário', detalhes: { id: novoCard.id }, depois: _cardLog(novoCard) });
     saveAll();
@@ -4280,20 +4362,66 @@ function saveCard() {
   notify('Cartão salvo!', 'ok');
 }
 
-function deleteCard(id) {
-  if (!confirm('Remover este cartão? Os lançamentos associados não serão afetados.')) return;
+// Conta quantos lançamentos e registros de fatura estão vinculados a um cartão.
+// Define o ciclo de vida: com vínculo → só pode ser arquivado; sem vínculo → pode
+// ser excluído de vez.
+function _cardLinkCount(id) {
+  const ne = expenses.filter(e => String(e.cardId) === String(id)).length;
+  const nf = faturaPagamentos.filter(f => String(f.cardId) === String(id)).length;
+  return { expenses: ne, faturas: nf, total: ne + nf };
+}
+
+// 🗑 — exclui definitivamente só se não houver NENHUM vínculo; caso contrário oferece
+// arquivar (o histórico de competência, faturas do Casal, filtros e relatórios precisa
+// do cartão). Reescrito p/ usar o modal próprio (sem o confirm() nativo).
+async function deleteCard(id) {
   const alvo = cards.find(c => c.id === id);
+  if (!alvo) return;
+  const link = _cardLinkCount(id);
+  if (link.total > 0) {
+    const msg = `"${alvo.nome}" tem ${link.expenses} lançamento(s) vinculado(s) e por isso não pode ser excluído — o histórico (competência, faturas do Casal na Divisão, filtros e relatórios) depende dele.\n\nDeseja arquivá-lo? Ele some dos seletores de novos lançamentos e da importação, mas continua no histórico.`;
+    if (await confirmModal(msg, { title: 'Arquivar cartão?', okText: 'Arquivar' })) archiveCard(id);
+    return;
+  }
+  if (!(await confirmModal(`Excluir o cartão "${alvo.nome}" definitivamente? Ele não tem nenhum lançamento vinculado.`, { title: 'Excluir cartão', okText: 'Excluir', danger: true }))) return;
   cards = cards.filter(c => c.id !== id);
-  auditLog({ tipo: 'acao_usuario', categoria: 'cartao', acao: 'excluir', ator: 'Usuário', detalhes: { id }, antes: alvo ? { nome: alvo.nome, final: alvo.final, tipo: alvo.tipo, dono: alvo.dono } : null });
+  auditLog({ tipo: 'acao_usuario', categoria: 'cartao', acao: 'excluir', ator: 'Usuário', detalhes: { id }, antes: { nome: alvo.nome, banco: alvo.banco, final: alvo.final, tipo: alvo.tipo, dono: alvo.dono } });
   saveAll();
   renderCardsList();
-  notify('Cartão removido.', 'info');
+  notify('Cartão excluído.', 'info');
+}
+
+// Arquivar: ativo:false. Reversível (Reativar). Some dos seletores de novo lançamento
+// e da importação, mas permanece em todo o histórico/Divisão.
+function archiveCard(id) {
+  const c = cards.find(x => x.id === id);
+  if (!c) return;
+  c.ativo = false;
+  auditLog({ tipo: 'acao_usuario', categoria: 'cartao', acao: 'arquivar', ator: 'Usuário', detalhes: { id, nome: c.nome } });
+  saveAll();
+  renderCardsList();
+  notify(`"${c.nome}" arquivado.`, 'ok');
+}
+
+function reactivateCard(id) {
+  const c = cards.find(x => x.id === id);
+  if (!c) return;
+  // Reativar não pode recriar um conflito de banco+final com outro cartão ativo.
+  const dupe = cards.find(x => x.id !== id && x.ativo !== false &&
+    (x.banco || '') === (c.banco || '') && String(x.final || '') === String(c.final || ''));
+  if (dupe) { notify(`Não dá para reativar: já existe um cartão ativo ${(c.banco || 'sem banco')} •${c.final} ("${dupe.nome}").`, 'err'); return; }
+  c.ativo = true;
+  auditLog({ tipo: 'acao_usuario', categoria: 'cartao', acao: 'reativar', ator: 'Usuário', detalhes: { id, nome: c.nome } });
+  saveAll();
+  renderCardsList();
+  notify(`"${c.nome}" reativado.`, 'ok');
 }
 
 function populateAddCardSelect(method) {
   const wrap = document.getElementById('add-card-wrap');
   if (!wrap) return;
-  const matching = cards.filter(c => c.tipo === method);
+  // Novos lançamentos: só cartões ativos (arquivados somem do seletor).
+  const matching = cards.filter(c => c.tipo === method && c.ativo !== false);
   if (method !== 'Crédito' && method !== 'Débito') { wrap.style.display = 'none'; return; }
   if (!matching.length) { wrap.style.display = 'none'; return; }
   document.getElementById('add-card').innerHTML =
@@ -4305,7 +4433,9 @@ function populateAddCardSelect(method) {
 function populateEditCardSelect(method, currentCardId) {
   const wrap = document.getElementById('edit-card-wrap');
   if (!wrap) return;
-  const matching = cards.filter(c => c.tipo === method);
+  // Ativos + o cartão já atribuído a este lançamento (mesmo arquivado), p/ não
+  // perder o vínculo de um gasto antigo ao editá-lo.
+  const matching = cards.filter(c => c.tipo === method && (c.ativo !== false || c.id === currentCardId));
   if (method !== 'Crédito' && method !== 'Débito') { wrap.style.display = 'none'; return; }
   if (!matching.length) { wrap.style.display = 'none'; return; }
   document.getElementById('edit-card').innerHTML =
@@ -4317,7 +4447,8 @@ function populateEditCardSelect(method, currentCardId) {
 function populateInvoiceCardSelect() {
   const sel = document.getElementById('invoice-card-select');
   if (!sel) return;
-  const creditCards = cards.filter(c => c.tipo === 'Crédito');
+  // Importação de fatura: só cartões ativos (arquivados somem do fallback).
+  const creditCards = cards.filter(c => c.tipo === 'Crédito' && c.ativo !== false);
   sel.innerHTML =
     `<option value="">— Nenhum cartão —</option>` +
     creditCards.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.nome)}${c.final ? ' •'+escapeHtml(c.final) : ''} (${escapeHtml(c.dono)})</option>`).join('');

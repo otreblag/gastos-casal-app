@@ -110,6 +110,8 @@
     .btn-secondary:hover{background:var(--faint);border-color:#C8C5BE}
     .btn-success{background:var(--success);color:#fff}
     .btn-success:hover{background:#1B4730;box-shadow:0 2px 8px rgba(35,92,63,.22)}
+    .btn-danger{background:var(--danger);color:#fff}
+    .btn-danger:hover{background:#6E2424;box-shadow:0 2px 8px rgba(139,46,46,.28)}
     .btn-danger-soft{background:transparent;border:1px solid #D4AEAE;color:var(--danger);font-size:10px;padding:4px 9px;border-radius:6px;cursor:pointer;font-family:inherit;font-weight:600;letter-spacing:.03em;transition:all .15s;text-transform:uppercase}
     .btn-danger-soft:hover{background:var(--danger-soft)}
     .btn-icon{background:none;border:none;cursor:pointer;font-size:13px;padding:4px 6px;color:var(--muted);border-radius:5px;transition:all .12s}
@@ -699,13 +701,27 @@
       <div id="card-form-wrap" style="display:none;margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
         <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:10px" id="card-form-title">Novo cartão</div>
         <div class="form-row cols3" style="margin-bottom:10px">
-          <div><label>Nome do cartão</label><input type="text" id="card-form-nome" placeholder="Ex: C6 Casal, Nubank Gabriel" /></div>
-          <div><label>Final (4 dígitos)</label><input type="text" id="card-form-final" maxlength="4" placeholder="5058" style="font-family:monospace;letter-spacing:.12em" /></div>
-          <div><label>Dono</label><select id="card-form-dono"></select></div>
+          <div><label>Banco</label>
+            <select id="card-form-banco">
+              <option value="">— Selecionar —</option>
+              <option value="Itaú">Itaú</option>
+              <option value="Inter">Inter</option>
+              <option value="Santander">Santander</option>
+              <option value="Nubank">Nubank</option>
+              <option value="C6">C6</option>
+              <option value="Bradesco">Bradesco</option>
+              <option value="Banco do Brasil">Banco do Brasil</option>
+              <option value="Caixa">Caixa</option>
+              <option value="Outro">Outro</option>
+            </select>
+          </div>
+          <div><label>Nome do cartão</label><input type="text" id="card-form-nome" placeholder="Ex: Inter Casal, Nubank Gabriel" /></div>
+          <div><label>Final (4 dígitos)</label><input type="text" id="card-form-final" maxlength="4" inputmode="numeric" placeholder="1234" style="font-family:monospace;letter-spacing:.12em" /></div>
         </div>
-        <div class="form-row cols2" style="margin-bottom:10px">
-          <div><label>Titular (nome impresso)</label><input type="text" id="card-form-titular" placeholder="Ex: GABRIEL A ALBERTO" /></div>
-          <div><label>Divisão do dono (%)</label><input type="number" id="card-form-divisao" min="1" max="100" value="100" /><div class="hint">Campo legado — a divisão do Casal é 50/50 na aba Divisão, definida por fatura (quem pagou cada mês).</div></div>
+        <div class="form-row cols3" style="margin-bottom:10px">
+          <div><label>Dono</label><select id="card-form-dono"></select></div>
+          <div><label>Apelido (opcional)</label><input type="text" id="card-form-apelido" placeholder="Ex: inter, casal" /><div class="hint">Usado para identificar o cartão no Telegram</div></div>
+          <div><label>Titular (opcional)</label><input type="text" id="card-form-titular" placeholder="Ex: GABRIEL A ALBERTO" /></div>
         </div>
         <div class="form-row cols2" style="margin-bottom:10px">
           <div><label>Tipo</label>
@@ -1054,6 +1070,20 @@
     <div class="btn-row">
       <button class="btn btn-secondary" onclick="closeModal('acerto-modal')">Cancelar</button>
       <button class="btn btn-primary" onclick="confirmarAcerto()">✓ Registrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de confirmação próprio (substitui window.confirm nativo — evita o bug de
+     foco do Electron no Windows em que inputs param de aceitar digitação após um
+     diálogo nativo). Pilotado por confirmModal() no renderer.js. -->
+<div class="modal-overlay" id="confirm-modal" onclick="if(event.target===this)_confirmModalResolve(false)">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-title"><span id="confirm-modal-title">Confirmar</span></div>
+    <div id="confirm-modal-msg" style="font-size:13px;line-height:1.6;color:var(--text);white-space:pre-line;margin-bottom:20px"></div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="confirm-modal-cancel" onclick="_confirmModalResolve(false)">Cancelar</button>
+      <button class="btn btn-primary" id="confirm-modal-ok" onclick="_confirmModalResolve(true)">Confirmar</button>
     </div>
   </div>
 </div>
